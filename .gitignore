@@ -1,0 +1,7 @@
+data/
+node_modules/
+coverage/
+*.log
+build/
+src-tauri/binaries/
+src-tauri/target/

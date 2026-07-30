@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Permisos de la aplicación de bandeja de Unilink","local":true,"permissions":["core:default",{"identifier":"shell:allow-spawn","allow":[{"name":"binaries/unilink-server","sidecar":true}]}]}}
