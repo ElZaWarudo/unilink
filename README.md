@@ -3,10 +3,11 @@
 Unilink lets you start playback in Stremio and continue watching from a web
 browser on another device connected to the same local network.
 
-It adds **Serve over network** entries to Torrentio results, keeps a stable
-browser URL for the current selection, and runs quietly from the system tray.
-The desktop application is built with [Tauri](https://tauri.app/) and includes
-the local server, so end users do not need Node.js or a terminal.
+It adds **Servir en red** ("Serve over network") entries to Torrentio results,
+keeps a stable browser URL for the current selection, and runs quietly from the
+system tray. The desktop application is built with
+[Tauri](https://tauri.app/) and includes the local server, so end users do not
+need Node.js or a terminal.
 
 > [!IMPORTANT]
 > Unilink does not download or transcode media by itself. It reuses the local
@@ -73,7 +74,7 @@ Second screen:        http://YOUR-COMPUTER-IP:17891/watch
 2. Paste the complete URL of your configured Torrentio manifest and save it.
 3. Install `http://127.0.0.1:17891/manifest.json` in Stremio.
 4. Open a movie or episode and select a result beginning with
-   **Serve over network**.
+   **Servir en red** ("Serve over network").
 5. Open the second-screen URL from a browser on another device.
 
 The torrent starts when the browser requests `/media`. Selecting another result
