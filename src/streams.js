@@ -7,9 +7,9 @@ import {
 
 const INFO_HASH_PATTERN = /^[a-fA-F0-9]{40}$/;
 const DEFAULT_TRACKERS = [
-  "udp://tracker.opentrackr.org:1337/announce",
-  "udp://open.stealth.si:80/announce",
-  "udp://tracker.torrent.eu.org:451/announce",
+  "tracker:udp://tracker.opentrackr.org:1337/announce",
+  "tracker:udp://open.stealth.si:80/announce",
+  "tracker:udp://tracker.torrent.eu.org:451/announce",
 ];
 
 function isSupportedSource(source) {
@@ -391,7 +391,7 @@ export function buildStremioSourceUrl(
   const trackers =
     Array.isArray(source.sources) && source.sources.length
       ? source.sources
-      : DEFAULT_TRACKERS;
+      : [...DEFAULT_TRACKERS, `dht:${source.infoHash.toLowerCase()}`];
   for (const tracker of trackers) {
     url.searchParams.append("tr", tracker);
   }

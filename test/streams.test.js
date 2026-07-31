@@ -39,9 +39,10 @@ test("usa trackers de respaldo cuando Torrentio no entrega sources", () => {
     "/abcdef0123456789abcdef0123456789abcdef01/-1",
   );
   assert.deepEqual(result.searchParams.getAll("tr"), [
-    "udp://tracker.opentrackr.org:1337/announce",
-    "udp://open.stealth.si:80/announce",
-    "udp://tracker.torrent.eu.org:451/announce",
+    "tracker:udp://tracker.opentrackr.org:1337/announce",
+    "tracker:udp://open.stealth.si:80/announce",
+    "tracker:udp://tracker.torrent.eu.org:451/announce",
+    "dht:abcdef0123456789abcdef0123456789abcdef01",
   ]);
 });
 
