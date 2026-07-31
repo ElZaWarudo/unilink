@@ -1,10 +1,14 @@
-import { formatSubtitleDelay } from "./subtitle-delay.js";
 import {
-  subtitleSyncPanel,
-  SUBTITLE_SYNC_MOBILE_STYLES,
-  SUBTITLE_SYNC_STYLES,
-  SUBTITLE_SYNC_TABLET_STYLES,
-} from "./subtitle-sync-view.js";
+  formatSubtitleDelay,
+  SUBTITLE_DELAY_MAX,
+  SUBTITLE_DELAY_MIN,
+  SUBTITLE_DELAY_STEP,
+} from "./subtitle-delay.js";
+
+const SUBTITLE_DELAY_STEP_LABEL = SUBTITLE_DELAY_STEP.toFixed(2).replace(
+  ".",
+  ",",
+);
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -367,6 +371,57 @@ function layout(
     .settings .fields { grid-template-columns: 1fr; }
     .settings .actions { margin-top: var(--space-4); }
     .sub-count { margin-bottom: var(--space-5); font-size: .9rem; }
+    .field-label {
+      display: block;
+      margin-bottom: var(--space-2);
+      font-size: .9rem;
+      font-weight: 720;
+    }
+    .delay-stepper {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--space-2);
+      align-items: stretch;
+    }
+    .delay-stepper button {
+      min-width: 0;
+      border-color: var(--line-strong);
+      background: var(--base);
+      color: var(--text);
+      padding-inline: 10px;
+    }
+    .delay-stepper [data-subtitle-delay-change] {
+      min-height: 54px;
+      flex-direction: column;
+      gap: 2px;
+      line-height: 1.1;
+    }
+    .delay-stepper [data-subtitle-delay-change] small {
+      color: var(--quiet);
+      font-family: ui-monospace, "Cascadia Mono", monospace;
+      white-space: nowrap;
+    }
+    .delay-stepper button:hover { background: var(--surface-raised); }
+    .delay-stepper output {
+      grid-column: 1 / -1;
+      grid-row: 1;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius-md);
+      background: var(--surface-raised);
+      color: var(--signal);
+      padding: 8px 10px;
+      font-family: ui-monospace, "Cascadia Mono", monospace;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .delay-stepper .delay-reset {
+      grid-column: 1 / -1;
+      min-height: 36px;
+      color: var(--quiet);
+      font-size: .78rem;
+    }
     .completion-note {
       margin-top: var(--space-5);
       color: var(--quiet);
@@ -608,7 +663,6 @@ function layout(
       font-size: .72rem;
       white-space: nowrap;
     }
-    ${SUBTITLE_SYNC_STYLES}
     .player:fullscreen {
       width: 100%;
       height: 100%;
@@ -773,7 +827,6 @@ function layout(
       .player-controls { padding: var(--space-2); }
       .player-volume { display: none; }
       .player-clock { font-size: .66rem; }
-      ${SUBTITLE_SYNC_TABLET_STYLES}
       .marathon-head {
         align-items: stretch;
         flex-direction: column;
@@ -792,7 +845,6 @@ function layout(
       .actions > * { width: 100%; }
       .workbench, .handoff { margin-inline: -16px; border-radius: 0; }
       .playback-status { gap: var(--space-2) var(--space-4); }
-      ${SUBTITLE_SYNC_MOBILE_STYLES}
     }
     @media (prefers-reduced-motion: reduce) {
       .waiting-line::before { animation: none; }
@@ -915,11 +967,20 @@ export function activationPage({
              <span class="field-help" id="sourceHelp">Alternativas disponibles para el idioma seleccionado.</span>
            </div>
            <div class="field">
-             <label for="subtitleDelay">Sincronización</label>
-             <input id="subtitleDelay" name="subtitleDelay" type="number" min="-30" max="30" step="0.05"
-               inputmode="decimal" aria-describedby="delayHelp"
+             <span class="field-label" id="subtitleDelayLabel">Sincronización</span>
+             <input id="subtitleDelay" name="subtitleDelay" type="hidden"
                value="${escapeHtml(active.playbackSettings?.subtitleDelay ?? 0)}">
-             <span class="field-help" id="delayHelp">Pasos de 0,05 s. Negativo adelanta; positivo retrasa.</span>
+             <div class="delay-stepper" data-subtitle-delay-stepper
+               role="group" aria-labelledby="subtitleDelayLabel" aria-describedby="delayHelp">
+               <button type="button" data-subtitle-delay-change="-${SUBTITLE_DELAY_STEP}"
+                 aria-label="Mostrar los subtítulos ${SUBTITLE_DELAY_STEP_LABEL} segundos antes"><span>Antes</span><small>−${SUBTITLE_DELAY_STEP_LABEL} s</small></button>
+               <output data-subtitle-delay-output
+                 aria-label="Desfase seleccionado" aria-live="polite">${formatSubtitleDelay(active.playbackSettings?.subtitleDelay ?? 0)}</output>
+               <button type="button" data-subtitle-delay-change="${SUBTITLE_DELAY_STEP}"
+                 aria-label="Mostrar los subtítulos ${SUBTITLE_DELAY_STEP_LABEL} segundos después"><span>Después</span><small>+${SUBTITLE_DELAY_STEP_LABEL} s</small></button>
+               <button class="delay-reset" type="button" data-subtitle-delay-reset>Restablecer a 0,00 s</button>
+             </div>
+             <span class="field-help" id="delayHelp">“Antes” adelanta el texto; “Después” lo retrasa.</span>
            </div>
          </div>
          <div class="actions"><button type="submit">Aplicar subtítulos</button></div>
@@ -930,6 +991,9 @@ export function activationPage({
      const copyStatus=document.querySelector("#copyStatus");
      const languageSelect=document.querySelector("#subtitleLanguage");
      const sourceSelect=document.querySelector("#subtitleSource");
+     const delayInput=document.querySelector("#subtitleDelay");
+     const delayStepper=document.querySelector("[data-subtitle-delay-stepper]");
+     const delayOutput=document.querySelector("[data-subtitle-delay-output]");
      const sourceByLanguage=new Map();
      const syncSubtitleSources=()=>{
        if(!languageSelect||!sourceSelect)return;
@@ -953,6 +1017,26 @@ export function activationPage({
      };
      languageSelect?.addEventListener("change",syncSubtitleSources);
      syncSubtitleSources();
+     const normalizeDelay=value=>{
+       const number=Number(value);
+       if(!Number.isFinite(number))return 0;
+       const normalized=Math.round(Math.max(${SUBTITLE_DELAY_MIN},Math.min(${SUBTITLE_DELAY_MAX},number))/${SUBTITLE_DELAY_STEP})*${SUBTITLE_DELAY_STEP};
+       return Object.is(normalized,-0)?0:Number(normalized.toFixed(2));
+     };
+     const renderDelay=value=>{
+       if(!delayInput||!delayOutput)return;
+       const delay=normalizeDelay(value);
+       delayInput.value=String(delay);
+       const sign=delay>0?"+":delay<0?"−":"";
+       delayOutput.textContent=sign+Math.abs(delay).toFixed(2).replace(".",",")+" s";
+     };
+     delayStepper?.addEventListener("click",event=>{
+       const change=event.target.closest?.("[data-subtitle-delay-change]");
+       const reset=event.target.closest?.("[data-subtitle-delay-reset]");
+       if(change)renderDelay(Number(delayInput.value)+Number(change.dataset.subtitleDelayChange));
+       if(reset)renderDelay(0);
+     });
+     renderDelay(delayInput?.value);
      copyButton?.addEventListener("click",async()=>{
        let copied=false;
        try{
@@ -1152,7 +1236,6 @@ export function watchPage({
        data-version="${escapeHtml(active.version)}"
        data-server-instance-id="${escapeHtml(serverInstanceId)}"
        data-status-url="/api/status"
-       data-subtitle-delay-url="/api/subtitles/delay"
        data-subtitle-url="${escapeHtml(subtitleUrl)}"
        data-subtitle-delay="${escapeHtml(subtitleDelay)}"
        data-resume-key="${escapeHtml(resumeKey)}"
@@ -1186,7 +1269,6 @@ export function watchPage({
          </div>
        </div>
        </div>
-     ${selectedSubtitle ? subtitleSyncPanel(subtitleDelay) : ""}
      ${marathonPanel(marathon)}
      <details class="compatibility">
        <summary>Problemas de reproducción</summary>

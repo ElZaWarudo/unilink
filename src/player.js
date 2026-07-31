@@ -1,6 +1,3 @@
-import { normalizeSubtitleDelay } from "./subtitle-delay.js";
-import { startSubtitleSync } from "./subtitle-sync.js";
-
 function timestampSeconds(value) {
   const parts = String(value).trim().replace(",", ".").split(":");
   if (parts.length < 2 || parts.length > 3) {
@@ -159,7 +156,8 @@ function formatClock(value) {
 }
 
 function numericDelay(value) {
-  return normalizeSubtitleDelay(value);
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 const CONTROLS_HIDE_DELAY = 3000;
@@ -210,8 +208,6 @@ export function startPlayer(root) {
   const expectedServerInstanceId =
     root.dataset.serverInstanceId || "";
   const statusUrl = root.dataset.statusUrl || "/api/status";
-  const subtitleDelayUrl =
-    root.dataset.subtitleDelayUrl || "/api/subtitles/delay";
   const resumeKey = root.dataset.resumeKey
     ? `unilink:position:${root.dataset.resumeKey}`
     : "";
@@ -250,11 +246,9 @@ export function startPlayer(root) {
   let marathonBusy = false;
   let marathonCountdownTimer = 0;
   let marathonCountdownRemaining = 0;
-  let subtitleSync;
 
   video.controls = false;
   root.classList.add("is-enhanced");
-  root.dataset.currentDelay = String(subtitleDelay);
   root.dataset.controlsState = "visible";
 
   function isFullscreen() {
@@ -423,7 +417,7 @@ export function startPlayer(root) {
     }
   }
 
-  async function postForm(path, values = {}, options = {}) {
+  async function postForm(path, values = {}) {
     const body = new URLSearchParams();
     for (const [name, value] of Object.entries(values)) {
       body.set(name, String(value));
@@ -434,7 +428,6 @@ export function startPlayer(root) {
         "content-type": "application/x-www-form-urlencoded",
       },
       body,
-      keepalive: options.keepalive ?? false,
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -444,6 +437,15 @@ export function startPlayer(root) {
       throw error;
     }
     return payload;
+  }
+
+  function updateDelayState() {
+    root.dataset.currentDelay = String(subtitleDelay);
+    if (delayState) {
+      const sign = subtitleDelay > 0 ? "+" : "";
+      delayState.textContent =
+        `Sincronización ${sign}${subtitleDelay.toFixed(2).replace(".", ",")} s`;
+    }
   }
 
   async function advanceMarathon() {
@@ -805,7 +807,11 @@ export function startPlayer(root) {
         }
       }
       const nextDelay = numericDelay(status.subtitleDelay);
-      subtitleSync?.setExternalDelay(nextDelay);
+      if (nextDelay !== subtitleDelay) {
+        subtitleDelay = nextDelay;
+        updateDelayState();
+        renderCaption();
+      }
     } catch {
       // A transient status failure must not interrupt playback.
     }
@@ -947,32 +953,7 @@ export function startPlayer(root) {
   updatePlayButton();
   updateVolume();
   updateClock();
-  subtitleSync = startSubtitleSync({
-    playerRoot: root,
-    initialDelay: subtitleDelay,
-    requestSave: async (nextDelay, options) => {
-      try {
-        return await postForm(
-          subtitleDelayUrl,
-          {
-            subtitleDelay: nextDelay,
-            expectedVersion,
-            expectedServerInstanceId,
-          },
-          options,
-        );
-      } catch (error) {
-        if (error.status === 409 && error.payload?.stale) {
-          location.reload();
-        }
-        throw error;
-      }
-    },
-    onDelayChange(nextDelay) {
-      subtitleDelay = nextDelay;
-      renderCaption();
-    },
-  });
+  updateDelayState();
   if (video.readyState >= 1) {
     restorePosition();
   }
@@ -988,10 +969,7 @@ export function startPlayer(root) {
   loadSubtitles();
   pollStatus();
   const statusTimer = setInterval(pollStatus, 1000);
-  const saveOnExit = () => {
-    subtitleSync?.flushOnExit();
-    savePosition(true);
-  };
+  const saveOnExit = () => savePosition(true);
   window.addEventListener("pagehide", saveOnExit);
 
   return {
@@ -1000,7 +978,6 @@ export function startPlayer(root) {
       clearControlsTimer();
       clearTimeout(surfaceTapTimer);
       clearTimeout(feedbackTimer);
-      subtitleSync?.destroy();
       cancelMarathonCountdown();
       cancelAnimationFrame(animationFrame);
       marathonRoot?.removeEventListener(

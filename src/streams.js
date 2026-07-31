@@ -316,24 +316,6 @@ export class StreamRegistry {
     return this.active;
   }
 
-  setSubtitleDelay(subtitleDelay) {
-    if (!this.active) {
-      throw new Error("No hay ninguna fuente activa.");
-    }
-    const delay = normalizeSubtitleDelay(subtitleDelay);
-    const current = this.active.playbackSettings;
-    if (current?.subtitleDelay === delay) {
-      return this.active;
-    }
-    this.active.playbackSettings = {
-      ...current,
-      subtitleDelay: delay,
-    };
-    this.playbackDefaults = structuredClone(
-      this.active.playbackSettings,
-    );
-    return this.active;
-  }
 }
 
 function cleanLabel(value) {
@@ -342,19 +324,32 @@ function cleanLabel(value) {
     .trim();
 }
 
-function equivalentTorrentDescription(source, originalName) {
-  const details =
-    cleanLabel(source.description) || cleanLabel(source.title);
-  const infoHash = cleanLabel(source.infoHash);
-  const fingerprint = INFO_HASH_PATTERN.test(infoHash)
-    ? `#${infoHash.slice(0, 8).toLowerCase()}`
-    : "";
-
-  const torrent = details || originalName;
-  const relation = ["Torrent equivalente", fingerprint]
+function cleanMultilineLabel(value) {
+  return String(value ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
     .filter(Boolean)
-    .join(" · ");
-  return [torrent, relation].filter(Boolean).join("\n");
+    .join("\n");
+}
+
+function streamQualityLabel(value) {
+  const quality = cleanLabel(value).match(
+    /\b(?:2160p|4k|1440p|1080p|720p|480p|360p)\b/i,
+  )?.[0];
+  if (!quality) {
+    return "Fuente";
+  }
+  return /^(?:2160p|4k)$/i.test(quality)
+    ? "4K"
+    : quality.toLowerCase();
+}
+
+function torrentioDescription(source) {
+  return (
+    cleanMultilineLabel(source.description) ||
+    cleanMultilineLabel(source.title) ||
+    "Fuente disponible"
+  );
 }
 
 export function decorateTorrentioStreams(
@@ -369,11 +364,9 @@ export function decorateTorrentioStreams(
         ...source,
         ...(content ? { unilinkContent: content } : {}),
       });
-      const originalName = cleanLabel(source.name) || "Torrentio";
-
       return {
-        name: `📡 Servir · ${originalName}`,
-        description: equivalentTorrentDescription(source, originalName),
+        name: `Unilink\n${streamQualityLabel(source.name)}`,
+        description: torrentioDescription(source),
         externalUrl: new URL(
           `/activate/${encodeURIComponent(candidateId)}`,
           activationBaseUrl,

@@ -68,8 +68,8 @@ test("decora fuentes compatibles como acciones Servir en red", () => {
 
   assert.deepEqual(streams, [
     {
-      name: "📡 Servir · Torrentio 1080p",
-      description: "Big Buck Bunny\nTorrent equivalente · #abcdef01",
+      name: "Unilink\n1080p",
+      description: "Big Buck Bunny",
       externalUrl: "http://127.0.0.1:17891/activate/candidate-1",
     },
   ]);
@@ -77,6 +77,31 @@ test("decora fuentes compatibles como acciones Servir en red", () => {
     registry.getCandidate("candidate-1").infoHash,
     "abcdef0123456789abcdef0123456789abcdef01",
   );
+});
+
+test("conserva los datos útiles de Torrentio sin repetir su marca", () => {
+  const registry = new StreamRegistry({ idFactory: () => "candidate-1" });
+  const streams = decorateTorrentioStreams(
+    [
+      {
+        name: "Torrentio\n4k DV | HDR",
+        title:
+          "Booksmart (2019) (2160p WEBRip x265 HEVC 10bit AAC 5.1)\n👤 3 💾 4.6 GB ⚙️ 1337x",
+        infoHash: "d7a9f9e656ff7100f1512569e3ac70d77fc66d00",
+      },
+    ],
+    {
+      activationBaseUrl: "http://127.0.0.1:17891",
+      registry,
+    },
+  );
+
+  assert.deepEqual(streams[0], {
+    name: "Unilink\n4K",
+    description:
+      "Booksmart (2019) (2160p WEBRip x265 HEVC 10bit AAC 5.1)\n👤 3 💾 4.6 GB ⚙️ 1337x",
+    externalUrl: "http://127.0.0.1:17891/activate/candidate-1",
+  });
 });
 
 test("limita cada respuesta a candidatos que seguirán disponibles", () => {
@@ -158,18 +183,6 @@ test("el delay conserva la versión y cambiar de fuente la renueva", () => {
     subtitleDelay: 30,
   });
   assert.equal(registry.active.version, 1);
-
-  registry.setSubtitleDelay("0.05");
-  const preciseSettings = registry.active.playbackSettings;
-  assert.deepEqual(preciseSettings, {
-    subtitleLanguage: "es",
-    subtitleId: "es-1",
-    subtitleSourceIndex: 0,
-    subtitleDelay: 0.05,
-  });
-  assert.equal(registry.active.version, 1);
-  registry.setSubtitleDelay("0.05000000000000001");
-  assert.strictEqual(registry.active.playbackSettings, preciseSettings);
 
   registry.setPlaybackSettings({
     subtitleLanguage: "es",
