@@ -1,3 +1,11 @@
+import { formatSubtitleDelay } from "./subtitle-delay.js";
+import {
+  subtitleSyncPanel,
+  SUBTITLE_SYNC_MOBILE_STYLES,
+  SUBTITLE_SYNC_STYLES,
+  SUBTITLE_SYNC_TABLET_STYLES,
+} from "./subtitle-sync-view.js";
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -89,6 +97,7 @@ function layout(
       --radius-lg: 12px;
     }
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     html { background: var(--base); }
     body {
       margin: 0;
@@ -599,6 +608,7 @@ function layout(
       font-size: .72rem;
       white-space: nowrap;
     }
+    ${SUBTITLE_SYNC_STYLES}
     .player:fullscreen {
       width: 100%;
       height: 100%;
@@ -763,6 +773,7 @@ function layout(
       .player-controls { padding: var(--space-2); }
       .player-volume { display: none; }
       .player-clock { font-size: .66rem; }
+      ${SUBTITLE_SYNC_TABLET_STYLES}
       .marathon-head {
         align-items: stretch;
         flex-direction: column;
@@ -781,6 +792,7 @@ function layout(
       .actions > * { width: 100%; }
       .workbench, .handoff { margin-inline: -16px; border-radius: 0; }
       .playback-status { gap: var(--space-2) var(--space-4); }
+      ${SUBTITLE_SYNC_MOBILE_STYLES}
     }
     @media (prefers-reduced-motion: reduce) {
       .waiting-line::before { animation: none; }
@@ -904,10 +916,10 @@ export function activationPage({
            </div>
            <div class="field">
              <label for="subtitleDelay">Sincronización</label>
-             <input id="subtitleDelay" name="subtitleDelay" type="number" min="-30" max="30" step="0.1"
+             <input id="subtitleDelay" name="subtitleDelay" type="number" min="-30" max="30" step="0.05"
                inputmode="decimal" aria-describedby="delayHelp"
                value="${escapeHtml(active.playbackSettings?.subtitleDelay ?? 0)}">
-             <span class="field-help" id="delayHelp">Segundos: usa negativo para adelantar.</span>
+             <span class="field-help" id="delayHelp">Pasos de 0,05 s. Negativo adelanta; positivo retrasa.</span>
            </div>
          </div>
          <div class="actions"><button type="submit">Aplicar subtítulos</button></div>
@@ -1132,7 +1144,7 @@ export function watchPage({
          <span>Directo desde el host</span>
          <span>Sin transcodificar</span>
          <span>${subtitleStatus}</span>
-         <span data-subtitle-delay-state>Delay ${Number(subtitleDelay).toFixed(1)} s</span>
+         <span data-subtitle-delay-state>Sincronización ${formatSubtitleDelay(subtitleDelay)}</span>
        </div>
      </div>
      <div class="player"
@@ -1140,6 +1152,7 @@ export function watchPage({
        data-version="${escapeHtml(active.version)}"
        data-server-instance-id="${escapeHtml(serverInstanceId)}"
        data-status-url="/api/status"
+       data-subtitle-delay-url="/api/subtitles/delay"
        data-subtitle-url="${escapeHtml(subtitleUrl)}"
        data-subtitle-delay="${escapeHtml(subtitleDelay)}"
        data-resume-key="${escapeHtml(resumeKey)}"
@@ -1172,7 +1185,8 @@ export function watchPage({
              aria-label="Pantalla completa" title="Pantalla completa (F)">⛶</button>
          </div>
        </div>
-     </div>
+       </div>
+     ${selectedSubtitle ? subtitleSyncPanel(subtitleDelay) : ""}
      ${marathonPanel(marathon)}
      <details class="compatibility">
        <summary>Problemas de reproducción</summary>

@@ -78,6 +78,169 @@ test("cada arranque expone una identidad distinta", async (t) => {
   assert.equal(firstStatus.watchUrl, "http://127.0.0.1:17891/watch");
 });
 
+test("ajusta y persiste el delay desde el reproductor", async (t) => {
+  const registry = new StreamRegistry({ idFactory: () => "candidate-1" });
+  const candidate = registry.addCandidate({
+    url: "https://example.com/movie.mp4",
+  });
+  registry.activate(candidate);
+  registry.setSubtitles([
+    {
+      id: "es-1",
+      language: "es",
+      label: "Español",
+      url: "https://example.com/es.srt",
+    },
+  ]);
+  const app = await fixture({ registry });
+  t.after(app.close);
+  const saveConfig = app.configStore.save.bind(app.configStore);
+  let saveCalls = 0;
+  app.configStore.save = async (...args) => {
+    saveCalls += 1;
+    return saveConfig(...args);
+  };
+
+  const watchHtml = await fetch(`${app.baseUrl}/watch`).then((response) =>
+    response.text(),
+  );
+  assert.match(watchHtml, /data-subtitle-sync/);
+  assert.match(watchHtml, /data-subtitle-delay-action="advance"/);
+  assert.match(watchHtml, /data-subtitle-delay-action="delay"/);
+  assert.match(watchHtml, /data-subtitle-delay-action="reset"/);
+  assert.match(watchHtml, /data-subtitle-delay-action="retry"/);
+
+  const initialStatus = await fetch(`${app.baseUrl}/api/status`).then(
+    (result) => result.json(),
+  );
+  const delayBody = (subtitleDelay, overrides = {}) =>
+    new URLSearchParams({
+      subtitleDelay: String(subtitleDelay),
+      expectedVersion: String(initialStatus.version),
+      expectedServerInstanceId: initialStatus.serverInstanceId,
+      ...overrides,
+    });
+
+  const response = await fetch(`${app.baseUrl}/api/subtitles/delay`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: delayBody(0.05),
+  });
+  const status = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(status.subtitleDelay, 0.05);
+  assert.equal(registry.active.version, 1);
+  assert.equal(saveCalls, 1);
+  assert.equal(
+    (await app.configStore.load()).playbackSettings.subtitleDelay,
+    0.05,
+  );
+
+  const repeated = await fetch(`${app.baseUrl}/api/subtitles/delay`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: delayBody(0.05000000000000001),
+  });
+  assert.equal(repeated.status, 200);
+  assert.equal(saveCalls, 1);
+
+  const sharedScript = await fetch(`${app.baseUrl}/subtitle-delay.js`);
+  assert.match(sharedScript.headers.get("content-type"), /text\/javascript/);
+  assert.match(await sharedScript.text(), /normalizeSubtitleDelay/);
+
+  const controllerScript = await fetch(`${app.baseUrl}/subtitle-sync.js`);
+  assert.match(controllerScript.headers.get("content-type"), /text\/javascript/);
+  assert.match(await controllerScript.text(), /startSubtitleSync/);
+});
+
+test("rechaza guardados de subtítulos cruzados u obsoletos", async (t) => {
+  const registry = new StreamRegistry({ idFactory: () => "candidate-1" });
+  registry.activate(
+    registry.addCandidate({ url: "https://example.com/movie.mp4" }),
+  );
+  const app = await fixture({ registry });
+  t.after(app.close);
+  const status = await fetch(`${app.baseUrl}/api/status`).then((response) =>
+    response.json(),
+  );
+  const form = new URLSearchParams({
+    subtitleDelay: "0.05",
+    expectedVersion: String(status.version),
+    expectedServerInstanceId: status.serverInstanceId,
+  });
+
+  const hostile = await fetch(`${app.baseUrl}/api/subtitles/delay`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      origin: "http://evil.example",
+      "sec-fetch-site": "cross-site",
+    },
+    body: form,
+  });
+  assert.equal(hostile.status, 403);
+  assert.equal(hostile.headers.get("access-control-allow-origin"), null);
+  assert.equal(registry.active.playbackSettings.subtitleDelay, 0);
+
+  form.set("expectedVersion", String(status.version + 1));
+  const stale = await fetch(`${app.baseUrl}/api/subtitles/delay`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      origin: app.baseUrl,
+      "sec-fetch-site": "same-origin",
+    },
+    body: form,
+  });
+  assert.equal(stale.status, 409);
+  assert.equal((await stale.json()).stale, true);
+  assert.equal(registry.active.playbackSettings.subtitleDelay, 0);
+});
+
+test("revierte un guardado fallido y permite reintentar el mismo delay", async (t) => {
+  const registry = new StreamRegistry({ idFactory: () => "candidate-1" });
+  registry.activate(
+    registry.addCandidate({ url: "https://example.com/movie.mp4" }),
+  );
+  let saveCalls = 0;
+  const configStore = {
+    load: async () => ({}),
+    async save(value) {
+      saveCalls += 1;
+      if (saveCalls === 1) {
+        throw new Error("disk unavailable");
+      }
+      return value;
+    },
+  };
+  const app = await fixture({ registry, configStore });
+  t.after(app.close);
+  const status = await fetch(`${app.baseUrl}/api/status`).then((response) =>
+    response.json(),
+  );
+  const body = new URLSearchParams({
+    subtitleDelay: "0.05",
+    expectedVersion: String(status.version),
+    expectedServerInstanceId: status.serverInstanceId,
+  });
+
+  const failed = await fetch(`${app.baseUrl}/api/subtitles/delay`, {
+    method: "POST",
+    body,
+  });
+  assert.equal(failed.status, 500);
+  assert.equal(registry.active.playbackSettings.subtitleDelay, 0);
+
+  const retry = await fetch(`${app.baseUrl}/api/subtitles/delay`, {
+    method: "POST",
+    body,
+  });
+  assert.equal(retry.status, 200);
+  assert.equal((await retry.json()).subtitleDelay, 0.05);
+  assert.equal(saveCalls, 2);
+});
+
 test("devuelve una explicación cuando Torrentio aún no está configurado", async (t) => {
   const app = await fixture();
   t.after(app.close);

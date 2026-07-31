@@ -1,3 +1,6 @@
+import { normalizeSubtitleDelay } from "./subtitle-delay.js";
+import { startSubtitleSync } from "./subtitle-sync.js";
+
 function timestampSeconds(value) {
   const parts = String(value).trim().replace(",", ".").split(":");
   if (parts.length < 2 || parts.length > 3) {
@@ -156,8 +159,7 @@ function formatClock(value) {
 }
 
 function numericDelay(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
+  return normalizeSubtitleDelay(value);
 }
 
 const CONTROLS_HIDE_DELAY = 3000;
@@ -208,6 +210,8 @@ export function startPlayer(root) {
   const expectedServerInstanceId =
     root.dataset.serverInstanceId || "";
   const statusUrl = root.dataset.statusUrl || "/api/status";
+  const subtitleDelayUrl =
+    root.dataset.subtitleDelayUrl || "/api/subtitles/delay";
   const resumeKey = root.dataset.resumeKey
     ? `unilink:position:${root.dataset.resumeKey}`
     : "";
@@ -246,6 +250,7 @@ export function startPlayer(root) {
   let marathonBusy = false;
   let marathonCountdownTimer = 0;
   let marathonCountdownRemaining = 0;
+  let subtitleSync;
 
   video.controls = false;
   root.classList.add("is-enhanced");
@@ -418,7 +423,7 @@ export function startPlayer(root) {
     }
   }
 
-  async function marathonRequest(path, values = {}) {
+  async function postForm(path, values = {}, options = {}) {
     const body = new URLSearchParams();
     for (const [name, value] of Object.entries(values)) {
       body.set(name, String(value));
@@ -429,11 +434,16 @@ export function startPlayer(root) {
         "content-type": "application/x-www-form-urlencoded",
       },
       body,
+      keepalive: options.keepalive ?? false,
     });
+    const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+      const error = new Error(payload.error || `HTTP ${response.status}`);
+      error.status = response.status;
+      error.payload = payload;
+      throw error;
     }
-    return response.json();
+    return payload;
   }
 
   async function advanceMarathon() {
@@ -447,7 +457,7 @@ export function startPlayer(root) {
       marathonAdvance.disabled = true;
     }
     try {
-      await marathonRequest("/api/marathon/advance", {
+      await postForm("/api/marathon/advance", {
         id: marathonState.items[0].id,
       });
       location.reload();
@@ -512,19 +522,19 @@ export function startPlayer(root) {
       let result;
       if (action === "toggle-autoplay") {
         cancelMarathonCountdown();
-        result = await marathonRequest("/api/marathon/settings", {
+        result = await postForm("/api/marathon/settings", {
           autoplay: !marathonState?.autoplay,
           countdownSeconds:
             marathonState?.countdownSeconds ?? 10,
           queueSize: marathonState?.queueSize ?? 5,
         });
       } else if (action === "move-up" || action === "move-down") {
-        result = await marathonRequest("/api/marathon/move", {
+        result = await postForm("/api/marathon/move", {
           id: button.dataset.marathonId,
           direction: action === "move-up" ? -1 : 1,
         });
       } else if (action === "remove") {
-        result = await marathonRequest("/api/marathon/remove", {
+        result = await postForm("/api/marathon/remove", {
           id: button.dataset.marathonId,
         });
       }
@@ -538,14 +548,6 @@ export function startPlayer(root) {
       setMessage("No se pudo actualizar la cola de episodios.");
       marathonFingerprint = "";
       renderMarathon(marathonState);
-    }
-  }
-
-  function updateDelayState() {
-    root.dataset.currentDelay = String(subtitleDelay);
-    if (delayState) {
-      const sign = subtitleDelay > 0 ? "+" : "";
-      delayState.textContent = `Delay ${sign}${subtitleDelay.toFixed(1)} s`;
     }
   }
 
@@ -803,11 +805,7 @@ export function startPlayer(root) {
         }
       }
       const nextDelay = numericDelay(status.subtitleDelay);
-      if (nextDelay !== subtitleDelay) {
-        subtitleDelay = nextDelay;
-        updateDelayState();
-        renderCaption();
-      }
+      subtitleSync?.setExternalDelay(nextDelay);
     } catch {
       // A transient status failure must not interrupt playback.
     }
@@ -949,7 +947,32 @@ export function startPlayer(root) {
   updatePlayButton();
   updateVolume();
   updateClock();
-  updateDelayState();
+  subtitleSync = startSubtitleSync({
+    playerRoot: root,
+    initialDelay: subtitleDelay,
+    requestSave: async (nextDelay, options) => {
+      try {
+        return await postForm(
+          subtitleDelayUrl,
+          {
+            subtitleDelay: nextDelay,
+            expectedVersion,
+            expectedServerInstanceId,
+          },
+          options,
+        );
+      } catch (error) {
+        if (error.status === 409 && error.payload?.stale) {
+          location.reload();
+        }
+        throw error;
+      }
+    },
+    onDelayChange(nextDelay) {
+      subtitleDelay = nextDelay;
+      renderCaption();
+    },
+  });
   if (video.readyState >= 1) {
     restorePosition();
   }
@@ -965,7 +988,10 @@ export function startPlayer(root) {
   loadSubtitles();
   pollStatus();
   const statusTimer = setInterval(pollStatus, 1000);
-  const saveOnExit = () => savePosition(true);
+  const saveOnExit = () => {
+    subtitleSync?.flushOnExit();
+    savePosition(true);
+  };
   window.addEventListener("pagehide", saveOnExit);
 
   return {
@@ -974,6 +1000,7 @@ export function startPlayer(root) {
       clearControlsTimer();
       clearTimeout(surfaceTapTimer);
       clearTimeout(feedbackTimer);
+      subtitleSync?.destroy();
       cancelMarathonCountdown();
       cancelAnimationFrame(animationFrame);
       marathonRoot?.removeEventListener(

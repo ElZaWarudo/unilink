@@ -4,6 +4,7 @@ import {
   normalizeMarathonSettings,
   normalizePlaybackSettings,
 } from "./config.js";
+import { normalizeSubtitleDelay } from "./subtitle-delay.js";
 
 const INFO_HASH_PATTERN = /^[a-fA-F0-9]{40}$/;
 const DEFAULT_TRACKERS = [
@@ -266,7 +267,6 @@ export class StreamRegistry {
     }
     const subtitles = this.active.subtitles ?? [];
     const languages = new Set(subtitles.map((subtitle) => subtitle.language));
-    const delay = Number(subtitleDelay);
     const currentLanguage =
       this.active.playbackSettings?.subtitleLanguage ?? "";
     const currentSubtitleId =
@@ -308,9 +308,26 @@ export class StreamRegistry {
       subtitleLanguage: nextLanguage,
       subtitleId: nextSubtitleId,
       subtitleSourceIndex,
-      subtitleDelay: Number.isFinite(delay)
-        ? Math.max(-30, Math.min(30, delay))
-        : 0,
+      subtitleDelay: normalizeSubtitleDelay(subtitleDelay),
+    };
+    this.playbackDefaults = structuredClone(
+      this.active.playbackSettings,
+    );
+    return this.active;
+  }
+
+  setSubtitleDelay(subtitleDelay) {
+    if (!this.active) {
+      throw new Error("No hay ninguna fuente activa.");
+    }
+    const delay = normalizeSubtitleDelay(subtitleDelay);
+    const current = this.active.playbackSettings;
+    if (current?.subtitleDelay === delay) {
+      return this.active;
+    }
+    this.active.playbackSettings = {
+      ...current,
+      subtitleDelay: delay,
     };
     this.playbackDefaults = structuredClone(
       this.active.playbackSettings,

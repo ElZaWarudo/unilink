@@ -159,6 +159,18 @@ test("el delay conserva la versión y cambiar de fuente la renueva", () => {
   });
   assert.equal(registry.active.version, 1);
 
+  registry.setSubtitleDelay("0.05");
+  const preciseSettings = registry.active.playbackSettings;
+  assert.deepEqual(preciseSettings, {
+    subtitleLanguage: "es",
+    subtitleId: "es-1",
+    subtitleSourceIndex: 0,
+    subtitleDelay: 0.05,
+  });
+  assert.equal(registry.active.version, 1);
+  registry.setSubtitleDelay("0.05000000000000001");
+  assert.strictEqual(registry.active.playbackSettings, preciseSettings);
+
   registry.setPlaybackSettings({
     subtitleLanguage: "es",
     subtitleId: "es-2",
@@ -171,7 +183,7 @@ test("el delay conserva la versión y cambiar de fuente la renueva", () => {
   registry.setPlaybackSettings({
     subtitleLanguage: "en",
     subtitleId: "fuente-inexistente",
-    subtitleDelay: "-2.5",
+    subtitleDelay: "-2.5000000000000004",
   });
 
   assert.equal(registry.active.version, 3);

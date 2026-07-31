@@ -50,6 +50,12 @@ const MANIFEST = {
   },
 };
 const PLAYER_SCRIPT = readFile(new URL("./player.js", import.meta.url));
+const SUBTITLE_DELAY_SCRIPT = readFile(
+  new URL("./subtitle-delay.js", import.meta.url),
+);
+const SUBTITLE_SYNC_SCRIPT = readFile(
+  new URL("./subtitle-sync.js", import.meta.url),
+);
 
 const FORWARDED_RESPONSE_HEADERS = [
   "accept-ranges",
@@ -82,6 +88,27 @@ function applyCommonHeaders(response) {
     "Access-Control-Expose-Headers",
     "Content-Length, Content-Range, Accept-Ranges, X-Unilink-Warning",
   );
+}
+
+function isTrustedMutationRequest(request) {
+  const fetchSite = String(request.headers["sec-fetch-site"] ?? "")
+    .trim()
+    .toLowerCase();
+  if (fetchSite === "cross-site") {
+    return false;
+  }
+  const origin = request.headers.origin;
+  if (!origin) {
+    return true;
+  }
+  try {
+    const parsed = new URL(origin);
+    return (
+      parsed.protocol === "http:" && parsed.host === request.headers.host
+    );
+  } catch {
+    return false;
+  }
 }
 
 function sendJson(response, status, value, headers = {}) {
@@ -513,6 +540,7 @@ export function createUnilinkServer({
   fetchImpl = fetch,
 }) {
   const serverInstanceId = randomUUID();
+  let subtitleDelayUpdates = Promise.resolve();
 
   return createServer(async (request, response) => {
     applyCommonHeaders(response);
@@ -543,6 +571,30 @@ export function createUnilinkServer({
           "cache-control": "no-store",
         });
         response.end(await PLAYER_SCRIPT);
+        return;
+      }
+
+      if (
+        url.pathname === "/subtitle-delay.js" &&
+        request.method === "GET"
+      ) {
+        response.writeHead(200, {
+          "content-type": "text/javascript; charset=utf-8",
+          "cache-control": "no-store",
+        });
+        response.end(await SUBTITLE_DELAY_SCRIPT);
+        return;
+      }
+
+      if (
+        url.pathname === "/subtitle-sync.js" &&
+        request.method === "GET"
+      ) {
+        response.writeHead(200, {
+          "content-type": "text/javascript; charset=utf-8",
+          "cache-control": "no-store",
+        });
+        response.end(await SUBTITLE_SYNC_SCRIPT);
         return;
       }
 
@@ -734,6 +786,70 @@ export function createUnilinkServer({
           200,
           playerStatus(registry, serverInstanceId, watchUrl),
         );
+        return;
+      }
+
+      if (
+        url.pathname === "/api/subtitles/delay" &&
+        request.method === "POST"
+      ) {
+        response.removeHeader("Access-Control-Allow-Origin");
+        if (!isTrustedMutationRequest(request)) {
+          sendJson(response, 403, {
+            error: "Origen no permitido.",
+          });
+          return;
+        }
+        const form = await readForm(request);
+        const update = subtitleDelayUpdates.then(async () => {
+          if (!registry.active) {
+            return {
+              status: 409,
+              body: { error: "No hay ninguna reproducción activa." },
+            };
+          }
+          const expectedVersion = Number(form.get("expectedVersion"));
+          const expectedInstance = form.get("expectedServerInstanceId");
+          if (
+            expectedVersion !== registry.active.version ||
+            expectedInstance !== serverInstanceId
+          ) {
+            return {
+              status: 409,
+              body: {
+                ...playerStatus(registry, serverInstanceId, watchUrl),
+                error: "La reproducción ha cambiado. Recargando…",
+                stale: true,
+              },
+            };
+          }
+
+          const previousDelay =
+            registry.active.playbackSettings?.subtitleDelay ?? 0;
+          const active = registry.setSubtitleDelay(
+            form.get("subtitleDelay"),
+          );
+          if (active.playbackSettings.subtitleDelay !== previousDelay) {
+            try {
+              await configStore.save({
+                playbackSettings: active.playbackSettings,
+              });
+            } catch (error) {
+              registry.setSubtitleDelay(previousDelay);
+              throw error;
+            }
+          }
+          return {
+            status: 200,
+            body: playerStatus(registry, serverInstanceId, watchUrl),
+          };
+        });
+        subtitleDelayUpdates = update.then(
+          () => undefined,
+          () => undefined,
+        );
+        const result = await update;
+        sendJson(response, result.status, result.body);
         return;
       }
 

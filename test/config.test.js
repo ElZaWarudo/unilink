@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   ConfigStore,
   normalizeMarathonSettings,
+  normalizePlaybackSettings,
   normalizeTorrentioManifestUrl,
   torrentioResourceUrl,
 } from "../src/config.js";
@@ -60,6 +61,57 @@ test("normaliza los ajustes de maratón dentro de límites seguros", () => {
     countdownSeconds: 10,
     queueSize: 5,
   });
+});
+
+test("normaliza el delay de subtítulos en pasos de 0,05 dentro de sus límites", () => {
+  assert.equal(
+    normalizePlaybackSettings({ subtitleDelay: 0.30000000000000004 })
+      .subtitleDelay,
+    0.3,
+  );
+  assert.equal(
+    normalizePlaybackSettings({ subtitleDelay: 30.5 }).subtitleDelay,
+    30,
+  );
+  assert.equal(
+    normalizePlaybackSettings({ subtitleDelay: -30.5 }).subtitleDelay,
+    -30,
+  );
+  assert.equal(
+    normalizePlaybackSettings({ subtitleDelay: 0.07 }).subtitleDelay,
+    0.05,
+  );
+});
+
+test("serializa escrituras para que el último ajuste gane", async () => {
+  const store = new ConfigStore("unused.json");
+  const order = [];
+  let releaseFirst;
+  const firstGate = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+  store.write = async ({ marker }) => {
+    order.push(`start-${marker}`);
+    if (marker === "first") {
+      await firstGate;
+    }
+    order.push(`end-${marker}`);
+    return marker;
+  };
+
+  const first = store.save({ marker: "first" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const second = store.save({ marker: "second" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, ["start-first"]);
+  releaseFirst();
+  await Promise.all([first, second]);
+  assert.deepEqual(order, [
+    "start-first",
+    "end-first",
+    "start-second",
+    "end-second",
+  ]);
 });
 
 test("persiste la configuración de forma atómica", async () => {

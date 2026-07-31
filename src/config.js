@@ -2,6 +2,8 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 
+import { normalizeSubtitleDelay } from "./subtitle-delay.js";
+
 export const DEFAULT_MARATHON_SETTINGS = {
   autoplay: true,
   countdownSeconds: 10,
@@ -52,7 +54,6 @@ export function normalizePlaybackSettings(settings) {
     return null;
   }
   const subtitleSourceIndex = Number(settings.subtitleSourceIndex);
-  const subtitleDelay = Number(settings.subtitleDelay);
   return {
     subtitleLanguage: String(settings.subtitleLanguage ?? "")
       .trim()
@@ -62,9 +63,7 @@ export function normalizePlaybackSettings(settings) {
       Number.isInteger(subtitleSourceIndex) && subtitleSourceIndex >= 0
         ? subtitleSourceIndex
         : 0,
-    subtitleDelay: Number.isFinite(subtitleDelay)
-      ? Math.max(-30, Math.min(30, subtitleDelay))
-      : 0,
+    subtitleDelay: normalizeSubtitleDelay(settings.subtitleDelay),
   };
 }
 
@@ -93,6 +92,7 @@ export function normalizeMarathonSettings(settings = {}) {
 export class ConfigStore {
   constructor(path) {
     this.path = path;
+    this.saveQueue = Promise.resolve();
   }
 
   async load() {
@@ -125,7 +125,19 @@ export class ConfigStore {
     }
   }
 
-  async save(config) {
+  save(config) {
+    const pending = this.saveQueue.then(
+      () => this.write(config),
+      () => this.write(config),
+    );
+    this.saveQueue = pending.then(
+      () => undefined,
+      () => undefined,
+    );
+    return pending;
+  }
+
+  async write(config) {
     const current = await this.load();
     const merged = { ...current, ...config };
     const normalized = {};

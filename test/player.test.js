@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  adjustSubtitleDelay,
+  formatSubtitleDelay,
+  normalizeSubtitleDelay,
+} from "../src/subtitle-delay.js";
+import {
   cueAtTime,
   parseWebVtt,
   resumeTime,
@@ -43,6 +48,21 @@ test("aplica el delay al buscar el cue sin modificar ni recargar la pista", () =
   assert.equal(cueAtTime(cues, 1.5, 1), null);
   assert.equal(cueAtTime(cues, 2.5, 1)?.text, "Primera línea\nSegunda línea");
   assert.equal(cueAtTime(cues, 0.5, -0.5)?.text, "Primera línea\nSegunda línea");
+});
+
+test("ajusta la sincronización en pasos exactos de 0,05 segundos", () => {
+  assert.equal(adjustSubtitleDelay(0, 0.05), 0.05);
+  assert.equal(adjustSubtitleDelay(0.05, 0.05), 0.1);
+  assert.equal(adjustSubtitleDelay(0.1, -0.05), 0.05);
+  assert.equal(normalizeSubtitleDelay(31), 30);
+  assert.equal(normalizeSubtitleDelay(-31), -30);
+  assert.equal(normalizeSubtitleDelay("no válido"), 0);
+});
+
+test("presenta el delay con signo y dos decimales", () => {
+  assert.equal(formatSubtitleDelay(0), "0,00 s");
+  assert.equal(formatSubtitleDelay(0.05), "+0,05 s");
+  assert.equal(formatSubtitleDelay(-1.5), "−1,50 s");
 });
 
 test("restaura una posición válida sin saltar al final de la película", () => {
