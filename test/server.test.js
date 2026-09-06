@@ -39,6 +39,41 @@ async function fixture(options = {}) {
   };
 }
 
+test("sirve HLS con audio AAC y oculta las URLs internas en todas las listas", async (t) => {
+  const registry = new StreamRegistry();
+  registry.activate(registry.addCandidate({ url: "https://example.com/movie.mkv" }));
+  let requested;
+  const app = await fixture({ registry, fetchImpl: async (url) => {
+    requested = new URL(url);
+    return new Response('#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,URI="audio1.m3u8?mediaURL=secret"\nvideo0.m3u8?mediaURL=secret\n');
+  } });
+  t.after(app.close);
+  const status = await fetch(`${app.baseUrl}/api/status`).then(r => r.json());
+  const base = `/hls/${status.serverInstanceId}/${status.version}/`;
+  const response = await fetch(`${app.baseUrl}${base}master.m3u8`);
+  assert.equal(response.status, 200);
+  assert.equal(requested.searchParams.get("audioCodecs"), "aac");
+  assert.equal(requested.searchParams.get("maxAudioChannels"), "2");
+  assert.equal(new URL(requested.searchParams.get("mediaURL")).host, new URL(app.baseUrl).host);
+  const playlist = await response.text();
+  assert.match(playlist, new RegExp(`${base}audio1.m3u8`));
+  assert.match(playlist, new RegExp(`${base}video0.m3u8`));
+  assert.doesNotMatch(playlist, /secret|mediaURL/);
+  registry.activate(registry.addCandidate({ url: "https://example.com/next.mkv" }));
+  assert.equal((await fetch(`${app.baseUrl}${base}audio1/init.mp4`)).status, 409);
+});
+
+test("rechaza referencias HLS externas y no deja sustituir el origen por query", async (t) => {
+  const registry = new StreamRegistry();
+  registry.activate(registry.addCandidate({ url: "https://example.com/movie.mkv" }));
+  const app = await fixture({ registry, fetchImpl: async () => new Response('#EXTM3U\nhttps://evil.example/video0.m3u8\n') });
+  t.after(app.close);
+  const status = await fetch(`${app.baseUrl}/api/status`).then(r => r.json());
+  const base = `/hls/${status.serverInstanceId}/${status.version}/`;
+  assert.equal((await fetch(`${app.baseUrl}${base}master.m3u8?mediaURL=https://evil.example`)).status, 502);
+  assert.equal((await fetch(`${app.baseUrl}${base}probe`)).status, 404);
+});
+
 test("expone un manifest instalable y CORS", async (t) => {
   const app = await fixture();
   t.after(app.close);
@@ -200,7 +235,9 @@ test("activa una fuente y la página fija contiene un reproductor", async (t) =>
   const watch = await fetch(`${app.baseUrl}/watch`);
   const html = await watch.text();
   assert.match(html, /<video/);
-  assert.match(html, /src="\/media"/);
+  assert.match(html, /data-hls-url="\/hls\/[a-f0-9-]+\/1\/master\.m3u8"/);
+  assert.match(html, /data-player-control="audio"/);
+  assert.match(html, /src="\/hls.js"/);
   assert.match(html, /<h1>Película de prueba<\/h1>/);
   assert.match(html, /class="stream-data">👤 13 💾 866 MB ⚙️ YTS/);
 });

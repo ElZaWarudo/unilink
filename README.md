@@ -194,10 +194,21 @@ test/          Node.js test suite
 
 ## Compatibility and security notes
 
-- Unilink does not transcode. The browser must support the source container and
-  codecs. MP4 with H.264/AAC generally offers the broadest compatibility.
-- Stremio Desktop must remain open to serve the torrent and convert subtitle
-  tracks to WebVTT.
+- Browser playback uses Stremio's HLS v2 service to package video and prepare
+  AAC stereo audio, including sources with Dolby Digital Plus / E-AC-3 audio.
+  Stremio copies compatible video and may convert unsupported video codecs.
+- Use **Audio** beside the volume control to select an embedded language or
+  alternate soundtrack. The browser remembers the language and track name;
+  each screen chooses independently. A source with one track shows that track
+  with the selector disabled. HLS.js is bundled locally, with native HLS as a
+  fallback. Native players receive a playlist containing the chosen track,
+  preserving the playback position when switching audio.
+- An up-to-date Stremio Desktop must remain open to serve torrents, prepare HLS
+  playback, and convert subtitle tracks to WebVTT. If preparation fails, the
+  player offers **Reintentar** rather than falling back to potentially silent
+  playback. The browser must support MediaSource or native HLS.
+- `/media` remains available as the original, unconverted stream. HLS URLs are
+  tied to the active source and server instance; stale URLs return HTTP 409.
 - The `/watch` page has no authentication and is intended only for trusted local
   networks.
 - Do not expose port `17891` to the Internet or configure router port

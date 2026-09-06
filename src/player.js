@@ -164,6 +164,137 @@ const CONTROLS_HIDE_DELAY = 3000;
 const DOUBLE_TAP_DELAY = 340;
 const SEEK_STEP = 10;
 
+function audioLanguage(track) {
+  const language = track.lang || track.language || "";
+  return ({ spa: "es", eng: "en", fra: "fr", fre: "fr", ger: "de", deu: "de", ita: "it", por: "pt", jpn: "ja" })[language] || language;
+}
+
+export function audioTrackLabel(track, index) {
+  let language = audioLanguage(track);
+  try {
+    language = new Intl.DisplayNames(["es"], { type: "language" }).of(language);
+  } catch { /* Older TV browsers can still show the language code. */ }
+  const name = track.name || track.label || "";
+  const details = name && name !== track.lang && name !== track.language ? name : "";
+  const label = [language, details, `Pista ${index + 1}`].filter(Boolean).join(" · ");
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+export function preferredAudioTrack(tracks, preference) {
+  if (!preference?.lang) return -1;
+  const exact = tracks.findIndex(track => audioLanguage(track) === audioLanguage(preference) && (track.name || track.label || "") === preference.name);
+  return exact >= 0 ? exact : tracks.findIndex(track => audioLanguage(track) === audioLanguage(preference));
+}
+
+export function startAudioPlayback({ video, select, url, onError, Hls = globalThis.Hls, fetchImpl = fetch }) {
+  let hls;
+  let disposed = false;
+  let tracks = [];
+  let preference;
+  try { preference = JSON.parse(localStorage.getItem("unilink:audio") || "null"); } catch { /* Playback works without storage. */ }
+  let nativeTracks = [];
+  let nativeIndex = -1;
+  let nativeResume = null;
+  const controller = new AbortController();
+  const render = () => {
+    if (disposed || !select) return;
+    tracks = hls ? hls.audioTracks : nativeTracks;
+    select.replaceChildren();
+    for (const [index, track] of tracks.entries()) {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = audioTrackLabel(track, index);
+      select.append(option);
+    }
+    if (!tracks.length) {
+      const option = document.createElement("option");
+      option.textContent = "Sin pistas seleccionables";
+      select.append(option);
+    }
+    select.disabled = tracks.length < 2;
+    sync();
+  };
+  const sync = () => {
+    const index = hls ? hls.audioTrack : nativeIndex;
+    if (select && index >= 0) select.value = String(index);
+  };
+  const choose = (index) => {
+    if (index < 0 || index >= tracks.length) return;
+    if (hls) hls.audioTrack = index;
+    else if (nativeIndex !== index) {
+      nativeResume = {
+        time: nativeResume?.time ?? (video.currentTime || 0),
+        playing: nativeResume?.playing || !video.paused,
+      };
+      nativeIndex = index;
+      video.src = `${url}?audio=${index}`;
+      sync();
+    }
+  };
+  const applyPreference = () => {
+    render();
+    choose(preferredAudioTrack(tracks, preference));
+    sync();
+  };
+  const change = () => {
+    const index = Number(select.value);
+    if (!Number.isInteger(index) || !tracks[index]) return;
+    choose(index);
+    preference = { lang: audioLanguage(tracks[index]), name: tracks[index].name || tracks[index].label || "" };
+    try { localStorage.setItem("unilink:audio", JSON.stringify(preference)); } catch { /* Optional preference. */ }
+  };
+  select?.addEventListener("change", change);
+  const restoreNativePosition = () => {
+    if (!nativeResume) return;
+    const { time, playing } = nativeResume;
+    nativeResume = null;
+    if (time > 0) video.currentTime = time;
+    if (playing) video.play().catch(() => onError("Pulsa Reproducir para continuar con la pista elegida."));
+  };
+  if (Hls?.isSupported()) {
+    hls = new Hls({ enableWorker: false, backBufferLength: 30, maxBufferLength: 20 });
+    hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, applyPreference);
+    hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, sync);
+    hls.on(Hls.Events.ERROR, (_, data) => {
+      if (data.fatal && !disposed) {
+        hls.stopLoad();
+        if (select) select.disabled = true;
+        onError("No se pudo reproducir con audio compatible. Comprueba que Stremio sigue abierto y actualizado, y pulsa Reintentar.");
+      }
+    });
+    hls.loadSource(url);
+    hls.attachMedia(video);
+  } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    video.addEventListener("loadedmetadata", restoreNativePosition);
+    fetchImpl(url.replace(/master\.m3u8$/, "audio.json"), { signal: controller.signal })
+      .then(response => {
+        if (!response.ok) throw new Error("No se pudieron obtener las pistas.");
+        return response.json();
+      })
+      .then(({ tracks: available }) => {
+        if (disposed) return;
+        nativeTracks = available;
+        render();
+        const preferred = preferredAudioTrack(tracks, preference);
+        if (tracks.length) choose(preferred >= 0 ? preferred : Math.max(0, tracks.findIndex(track => track.default)));
+        else video.src = url;
+      })
+      .catch(() => { if (!disposed) onError("No se pudieron preparar las pistas de audio. Comprueba Stremio y pulsa Reintentar."); });
+  } else {
+    onError("Este navegador no admite la reproducción con audio compatible. Usa un navegador con soporte HLS o MediaSource.");
+  }
+  return {
+    destroy() {
+      if (disposed) return;
+      disposed = true;
+      controller.abort();
+      hls?.destroy();
+      select?.removeEventListener("change", change);
+      video.removeEventListener("loadedmetadata", restoreNativePosition);
+    },
+  };
+}
+
 export function startPlayer(root) {
   const video = root.querySelector("video");
   const caption = root.querySelector('[data-player-part="caption"]');
@@ -176,6 +307,8 @@ export function startPlayer(root) {
   const clock = root.querySelector('[data-player-part="clock"]');
   const muteButton = root.querySelector('[data-player-control="mute"]');
   const volume = root.querySelector('[data-player-control="volume"]');
+  const audioSelect = root.querySelector('[data-player-control="audio"]');
+  const retryButton = root.querySelector('[data-player-control="retry"]');
   const captionsButton = root.querySelector(
     '[data-player-control="captions"]',
   );
@@ -246,6 +379,7 @@ export function startPlayer(root) {
   let marathonBusy = false;
   let marathonCountdownTimer = 0;
   let marathonCountdownRemaining = 0;
+  let playbackFailure = "";
 
   video.controls = false;
   root.classList.add("is-enhanced");
@@ -302,6 +436,7 @@ export function startPlayer(root) {
   }
 
   function setMessage(text = "") {
+    text = playbackFailure || text;
     message.textContent = text;
     message.hidden = !text;
   }
@@ -874,11 +1009,12 @@ export function startPlayer(root) {
   video.addEventListener("waiting", () => setMessage("Cargando vídeo…"));
   video.addEventListener("playing", () => setMessage());
   video.addEventListener("canplay", () => setMessage());
-  video.addEventListener("error", () =>
+  video.addEventListener("error", () => {
+    if (retryButton) retryButton.hidden = false;
     setMessage(
-      "Este navegador no puede reproducir esta fuente. Elige otra en Stremio.",
-    ),
-  );
+      "No se pudo reproducir esta fuente. Pulsa Reintentar; si continúa, elige otra en Stremio.",
+    );
+  });
 
   seek.addEventListener("input", () => {
     if (Number.isFinite(video.duration) && video.duration > 0) {
@@ -967,13 +1103,29 @@ export function startPlayer(root) {
     setMessage("Preparando vídeo…");
   }
   loadSubtitles();
+  const audioPlayback = root.dataset.hlsUrl ? startAudioPlayback({
+    video,
+    select: audioSelect,
+    url: root.dataset.hlsUrl,
+    onError(text) {
+      playbackFailure = text;
+      setMessage(text);
+      if (retryButton) retryButton.hidden = false;
+    },
+  }) : null;
+  const retryPlayback = () => { savePosition(true); window.location.reload(); };
+  retryButton?.addEventListener("click", retryPlayback);
   pollStatus();
   const statusTimer = setInterval(pollStatus, 1000);
-  const saveOnExit = () => savePosition(true);
+  const saveOnExit = () => { savePosition(true); audioPlayback?.destroy(); };
   window.addEventListener("pagehide", saveOnExit);
+  const restoreAfterCache = (event) => { if (event.persisted) window.location.reload(); };
+  window.addEventListener("pageshow", restoreAfterCache);
 
   return {
     destroy() {
+      audioPlayback?.destroy();
+      retryButton?.removeEventListener("click", retryPlayback);
       clearInterval(statusTimer);
       clearControlsTimer();
       clearTimeout(surfaceTapTimer);
@@ -985,6 +1137,7 @@ export function startPlayer(root) {
         handleMarathonAction,
       );
       window.removeEventListener("pagehide", saveOnExit);
+      window.removeEventListener("pageshow", restoreAfterCache);
       savePosition(true);
     },
     pollStatus,

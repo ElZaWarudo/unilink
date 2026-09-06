@@ -657,6 +657,9 @@ function layout(
     }
     .player-seek { width: 100%; }
     .player-volume { width: 92px; }
+    .player-audio { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 45%; }
+    .player-audio select { min-width: 0; max-width: 100%; width: auto; padding: 6px; }
+    .player-audio label { margin: 0; font-size: 12px; }
     .player-clock {
       color: var(--text);
       font-family: ui-monospace, "Cascadia Mono", monospace;
@@ -826,6 +829,7 @@ function layout(
       }
       .player-controls { padding: var(--space-2); }
       .player-volume { display: none; }
+      .player-audio { max-width: 48%; }
       .player-clock { font-size: .66rem; }
       .marathon-head {
         align-items: stretch;
@@ -864,6 +868,7 @@ function layout(
   </header>
   <main id="main-content">${content}</main>
   ${script ? `<script>${script}</script>` : ""}
+  ${pageClass === "watch" ? '<script src="/hls.js"></script>' : ""}
   ${moduleSrc ? `<script type="module" src="${escapeHtml(moduleSrc)}"></script>` : ""}
 </body>
 </html>`;
@@ -1226,7 +1231,7 @@ export function watchPage({
        </div>
        <div class="playback-status" aria-label="Estado de la reproducción">
          <span>Directo desde el host</span>
-         <span>Sin transcodificar</span>
+         <span>Audio compatible</span>
          <span>${subtitleStatus}</span>
          <span data-subtitle-delay-state>Sincronización ${formatSubtitleDelay(subtitleDelay)}</span>
        </div>
@@ -1236,12 +1241,13 @@ export function watchPage({
        data-version="${escapeHtml(active.version)}"
        data-server-instance-id="${escapeHtml(serverInstanceId)}"
        data-status-url="/api/status"
+       data-hls-url="/hls/${escapeHtml(serverInstanceId)}/${escapeHtml(active.version)}/master.m3u8"
        data-subtitle-url="${escapeHtml(subtitleUrl)}"
        data-subtitle-delay="${escapeHtml(subtitleDelay)}"
        data-resume-key="${escapeHtml(resumeKey)}"
        tabindex="0"
        aria-label="Reproductor de ${escapeHtml(presentation.title)}">
-       <video controls playsinline preload="metadata" src="/media"
+       <video controls playsinline preload="metadata"
          aria-label="Vídeo de ${escapeHtml(presentation.title)}"></video>
        <p class="player-caption" data-player-part="caption" aria-hidden="true" hidden></p>
        <p class="player-message" data-player-part="message" role="status" aria-live="polite" hidden></p>
@@ -1260,6 +1266,13 @@ export function watchPage({
            <label class="sr-only" for="playerVolume">Volumen</label>
            <input class="player-volume" id="playerVolume" data-player-control="volume"
              type="range" min="0" max="1" step="0.05" value="1">
+           <div class="player-audio">
+             <label for="playerAudio">Audio</label>
+             <select id="playerAudio" data-player-control="audio" disabled>
+               <option>Buscando pistas…</option>
+             </select>
+           </div>
+           <button data-player-control="retry" type="button" hidden>Reintentar</button>
            <span class="control-spacer"></span>
            <button data-player-control="captions" type="button"
              aria-label="Activar o desactivar subtítulos" aria-pressed="true"
@@ -1272,7 +1285,7 @@ export function watchPage({
      ${marathonPanel(marathon)}
      <details class="compatibility">
        <summary>Problemas de reproducción</summary>
-       <p>Si el navegador no admite el contenedor, el vídeo o el audio, vuelve a Stremio y elige otra fuente.</p>
+       <p>Mantén Stremio abierto en el PC: prepara el audio compatible para cada pantalla. En Audio puedes elegir entre las pistas que incluye la fuente. Si falla, pulsa Reintentar; si el vídeo sigue sin reproducirse, elige otra fuente en Stremio.</p>
      </details>`,
     "",
     "watch",

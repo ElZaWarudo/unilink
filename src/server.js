@@ -2,6 +2,7 @@ import { Readable } from "node:stream";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { HLS_RESOURCE, proxyHls } from "./hls.js";
 
 import {
   normalizeTorrentioManifestUrl,
@@ -50,6 +51,7 @@ const MANIFEST = {
   },
 };
 const PLAYER_SCRIPT = readFile(new URL("./player.js", import.meta.url));
+const HLS_SCRIPT = readFile(new URL("../node_modules/hls.js/dist/hls.min.js", import.meta.url));
 
 const FORWARDED_RESPONSE_HEADERS = [
   "accept-ranges",
@@ -514,7 +516,7 @@ export function createUnilinkServer({
 }) {
   const serverInstanceId = randomUUID();
 
-  return createServer(async (request, response) => {
+  const server = createServer(async (request, response) => {
     applyCommonHeaders(response);
     if (!isLocalNetworkAddress(request.socket.remoteAddress)) {
       sendHtml(
@@ -543,6 +545,33 @@ export function createUnilinkServer({
           "cache-control": "no-store",
         });
         response.end(await PLAYER_SCRIPT);
+        return;
+      }
+
+      if (url.pathname === "/hls.js" && request.method === "GET") {
+        response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
+        response.end(await HLS_SCRIPT);
+        return;
+      }
+
+      const hlsMatch = url.pathname.match(/^\/hls\/([a-f0-9-]+)\/(\d+)\/(.+)$/);
+      if (hlsMatch && ["GET", "HEAD"].includes(request.method)) {
+        const [, instanceId, version, resource] = hlsMatch;
+        if (!HLS_RESOURCE.test(resource) && resource !== "audio.json") {
+          sendJson(response, 404, { error: "Recurso HLS no disponible." });
+          return;
+        }
+        if (instanceId !== serverInstanceId || Number(version) !== registry.active?.version) {
+          sendJson(response, 409, { error: "La fuente ha cambiado. Recarga el reproductor." });
+          return;
+        }
+        const mediaUrl = `http://127.0.0.1:${server.address().port}/media?instance=${serverInstanceId}&version=${version}`;
+        const audioIndex = url.searchParams.has("audio") ? Number(url.searchParams.get("audio")) : undefined;
+        if (audioIndex !== undefined && (!Number.isInteger(audioIndex) || audioIndex < 0)) {
+          sendJson(response, 400, { error: "Pista de audio no válida." });
+          return;
+        }
+        await proxyHls({ request, response, resource, audioIndex, instanceId, version, stremioServerUrl, mediaUrl, fetchImpl });
         return;
       }
 
@@ -845,6 +874,11 @@ export function createUnilinkServer({
         url.pathname === "/media" &&
         ["GET", "HEAD"].includes(request.method)
       ) {
+        if ((url.searchParams.has("version") && Number(url.searchParams.get("version")) !== registry.active?.version) ||
+            (url.searchParams.has("instance") && url.searchParams.get("instance") !== serverInstanceId)) {
+          sendJson(response, 409, { error: "La fuente ha cambiado." });
+          return;
+        }
         await proxyActiveStream({
           request,
           response,
@@ -864,4 +898,5 @@ export function createUnilinkServer({
       }
     }
   });
+  return server;
 }

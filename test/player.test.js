@@ -13,7 +13,89 @@ import {
   seekTargetTime,
   shouldStartMarathonCountdown,
   shouldReloadPlayer,
+  audioTrackLabel,
+  preferredAudioTrack,
+  startAudioPlayback,
 } from "../src/player.js";
+
+test("identifica idiomas y distingue varias pistas del mismo idioma", () => {
+  assert.equal(audioTrackLabel({ lang: "spa", name: "spa" }, 0), "Español · Pista 1");
+  assert.equal(audioTrackLabel({ lang: "spa", name: "Comentarios" }, 1), "Español · Comentarios · Pista 2");
+  assert.equal(audioTrackLabel({}, 0), "Pista 1");
+});
+
+test("recuerda la pista por idioma y nombre sin reutilizar índices de otro episodio", () => {
+  const tracks = [{ lang: "eng", name: "Original" }, { lang: "spa", name: "Doblaje" }];
+  assert.equal(preferredAudioTrack(tracks, { lang: "spa", name: "Doblaje" }), 1);
+  assert.equal(preferredAudioTrack(tracks, { lang: "spa", name: "Otro nombre" }), 1);
+  assert.equal(preferredAudioTrack(tracks, { lang: "fra" }), -1);
+});
+
+test("cambia el audio sin reiniciar el vídeo y libera HLS al salir", (t) => {
+  const oldDocument = globalThis.document;
+  const oldStorage = globalThis.localStorage;
+  globalThis.document = { createElement: () => ({}) };
+  const stored = new Map();
+  globalThis.localStorage = { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value) };
+  t.after(() => { globalThis.document = oldDocument; globalThis.localStorage = oldStorage; });
+  let instance;
+  class FakeHls {
+    static isSupported = () => true;
+    static Events = { AUDIO_TRACKS_UPDATED: "tracks", AUDIO_TRACK_SWITCHED: "switched", ERROR: "error" };
+    constructor() { instance = this; this.callbacks = {}; this.audioTracks = [{ lang: "spa" }, { lang: "eng" }]; this.audioTrack = 0; }
+    on(event, fn) { this.callbacks[event] = fn; }
+    loadSource(url) { this.url = url; }
+    attachMedia(video) { this.video = video; }
+    stopLoad() { this.stopped = true; }
+    destroy() { this.destroyed = true; }
+  }
+  const video = Object.assign(new EventTarget(), { currentTime: 120, paused: false });
+  const select = Object.assign(new EventTarget(), { replaceChildren() {}, append() {} });
+  let failure;
+  const player = startAudioPlayback({ video, select, url: "/hls/test/master.m3u8", Hls: FakeHls, onError: text => { failure = text; } });
+  instance.callbacks.tracks();
+  assert.equal(select.disabled, false);
+  select.value = "1";
+  select.dispatchEvent(new Event("change"));
+  assert.equal(instance.audioTrack, 1);
+  assert.equal(video.currentTime, 120);
+  assert.equal(video.paused, false);
+  assert.equal(JSON.parse(stored.get("unilink:audio")).lang, "en");
+  instance.callbacks.error(null, { fatal: true });
+  assert.match(failure, /Reintentar/);
+  assert.equal(instance.stopped, true);
+  assert.equal(select.disabled, true);
+  player.destroy();
+  assert.equal(instance.destroyed, true);
+});
+
+test("selecciona audio nativo sin AudioTrack API y restaura posición y reproducción", async (t) => {
+  const oldDocument = globalThis.document;
+  globalThis.document = { createElement: () => ({}) };
+  t.after(() => { globalThis.document = oldDocument; });
+  const video = Object.assign(new EventTarget(), {
+    currentTime: 0, paused: true, canPlayType: () => "probably",
+    play: async () => { video.paused = false; },
+  });
+  const select = Object.assign(new EventTarget(), { replaceChildren() {}, append() {} });
+  const playback = startAudioPlayback({ video, select, Hls: null, url: "/hls/session/1/master.m3u8", onError: assert.fail,
+    fetchImpl: async () => Response.json({ tracks: [{ lang: "spa", default: true }, { lang: "eng" }] }),
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(video.src, "/hls/session/1/master.m3u8?audio=0");
+  video.dispatchEvent(new Event("loadedmetadata"));
+  video.currentTime = 180;
+  video.paused = false;
+  select.value = "1";
+  select.dispatchEvent(new Event("change"));
+  assert.equal(video.src, "/hls/session/1/master.m3u8?audio=1");
+  video.currentTime = 0;
+  video.paused = true;
+  video.dispatchEvent(new Event("loadedmetadata"));
+  assert.equal(video.currentTime, 180);
+  assert.equal(video.paused, false);
+  playback.destroy();
+});
 
 const SAMPLE_VTT = `WEBVTT
 
