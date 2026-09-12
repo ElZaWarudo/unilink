@@ -35,15 +35,15 @@ class Element {
   focus() { document.activeElement = this; }
 }
 
-function harness(t, { subtitleUrl = "", fetchImpl, storageFails = false } = {}) {
+function harness(t, { subtitleUrl = "", subtitleDelay = 0, hlsUrl = "", fetchImpl, storageFails = false } = {}) {
   const doc = new Element(); doc.createElement = tag => new Element(tag); doc.body = new Element("body"); doc.activeElement = doc.body;
   const win = new Element(); let reloads = 0; win.location = { reload() { reloads++; } };
-  const root = new Element(); root.dataset = { version: "3", serverInstanceId: "instance", subtitleUrl, resumeKey: "movie" }; doc.append(root);
+  const root = new Element(); root.dataset = { version: "3", serverInstanceId: "instance", subtitleUrl, subtitleDelay: String(subtitleDelay), subtitleLanguage: "en", hlsUrl, resumeKey: "movie" }; doc.append(root);
   const video = new Element("video"); Object.assign(video, { volume: 0.6, muted: false, paused: true, ended: false, currentTime: 120, duration: 1800, readyState: 3 }); root.append(video);
   const controls = new Element(); controls.className = "player-controls"; root.append(controls);
   const parts = {};
   for (const name of ["caption", "message", "seek-feedback", "clock", "subtitle-sync-status"]) { const node = new Element(); node.dataset.playerPart = name; root.append(node); parts[name] = node; }
-  for (const name of ["play", "seek", "mute", "volume", "captions", "fullscreen", "retry", "subtitle-retry"]) { const node = new Element(name === "seek" || name === "volume" ? "input" : "button"); node.dataset.playerControl = name; controls.append(node); parts[name] = node; }
+  for (const name of ["play", "seek", "mute", "volume", "captions", "fullscreen", "retry", "subtitle-retry", "subtitle-sync", "audio"]) { const node = new Element(name === "audio" ? "select" : name === "seek" || name === "volume" ? "input" : "button"); node.dataset.playerControl = name; controls.append(node); parts[name] = node; }
   const local = new Element(); local.dataset.localProgress = ""; doc.append(local);
   const subtitleStatus = new Element(); subtitleStatus.dataset.subtitleStatus = ""; doc.append(subtitleStatus);
   const queue = new Element(); queue.dataset.marathon = ""; doc.append(queue);
@@ -65,6 +65,49 @@ function harness(t, { subtitleUrl = "", fetchImpl, storageFails = false } = {}) 
     hide: () => { for (const timer of [...timers.values()]) if (timer.delay === 3000) timer.fn(); } };
 }
 const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+
+test("HLS library reset restores play intent and clears the decoder overlay only after frames advance", async t => {
+  let instance;
+  class FakeHls {
+    static isSupported = () => true;
+    static Events = { AUDIO_TRACKS_UPDATED: "tracks", AUDIO_TRACK_SWITCHED: "switched", ERROR: "error", MEDIA_ATTACHED: "attached" };
+    constructor() { instance = this; this.callbacks = {}; this.audioTracks = []; this.resets = 0; }
+    on(event, fn) { this.callbacks[event] = fn; }
+    attachMedia(video) { this.video = video; }
+    loadSource() {}
+    startLoad() {}
+    stopLoad() { this.stopped = true; }
+    destroy() {}
+    recoverMediaError() { this.resets++; this.video.error = null; this.video.paused = true; }
+  }
+  const previous = globalThis.Hls; globalThis.Hls = FakeHls;
+  t.after(() => { globalThis.Hls = previous; });
+  const h = harness(t, { hlsUrl: "/master.m3u8" }); let frames = 100;
+  h.video.videoWidth = 1920;
+  h.video.getVideoPlaybackQuality = () => ({ totalVideoFrames: frames, droppedVideoFrames: 0 });
+  h.video.pause = () => { h.video.paused = true; };
+  h.video.play = async () => { h.video.paused = false; await h.video.emit("play"); await h.video.emit("playing"); };
+  const fail = async () => {
+    h.video.error = { code: 3 }; await h.video.emit("error");
+    // hls.js 1.7.2 ErrorController runs this before application ERROR listeners.
+    instance.recoverMediaError();
+    instance.callbacks.error(null, { fatal: false, type: "mediaError", details: "mediaSourceRequiresReset" });
+    instance.callbacks.attached?.(); await settle();
+  };
+  h.video.paused = false; await fail();
+  assert.equal(instance.resets, 1, "the application must not duplicate the library reset");
+  assert.equal(h.video.paused, false, "attachment restores the pre-error play intent");
+  h.video.currentTime = 125; await h.video.emit("timeupdate");
+  assert.equal(h.parts.retry.hidden, false, "clock progress alone cannot clear a decoder failure");
+  frames = 110; await h.video.emit("timeupdate");
+  assert.equal(h.parts.message.hidden, true); assert.equal(h.parts.retry.hidden, true);
+  await fail(); await fail();
+  assert.equal(h.video.paused, true, "a repeated failure stops continuing audio");
+  assert.equal(instance.stopped, true); assert.equal(h.parts.retry.hidden, false);
+  await h.parts.play.emit("click"); instance.callbacks.attached(); await settle();
+  h.video.currentTime = 130; frames = 120; await h.video.emit("timeupdate");
+  assert.equal(h.parts.retry.hidden, true, "manual resume can retry after a terminal failure");
+});
 
 test("zero-volume button and M restore the last audible value; sliders describe time and percent", async t => {
   const h = harness(t); h.parts.volume.value = "0"; await h.parts.volume.emit("input");
@@ -202,4 +245,41 @@ test("queue operations acknowledge immediately, protect session, restore focus a
   const undoPending = h.queue.emit("click", { target: undo }); await settle(); assert.equal(requests[1].url, "/api/marathon/undo");
   finish(Response.json({ marathon: { ...state, items, canUndo: false } })); await undoPending;
   state = null; await h.player.pollStatus(); assert.equal(h.queue.hidden, true);
+});
+
+test("autosync replaces a saved manual delay and later fine-tuning remains relative", async t => {
+  let instance, manualDelay = -2;
+  class FakeHls {
+    static isSupported = () => true;
+    static Events = { AUDIO_TRACKS_UPDATED: "tracks", AUDIO_TRACK_SWITCHED: "switched", ERROR: "error" };
+    constructor() { instance = this; this.callbacks = {}; this.audioTracks = [{lang:"en"}]; this.audioTrack = 0; }
+    on(name, fn) { this.callbacks[name] = fn; }
+    loadSource() {} attachMedia() {} destroy() {}
+  }
+  const previous = globalThis.Hls; globalThis.Hls = FakeHls;
+  t.after(() => { globalThis.Hls = previous; });
+  const h = harness(t, { hlsUrl:"/master.m3u8", subtitleUrl:"/en.vtt", subtitleDelay:manualDelay,
+    fetchImpl: async (url, options) => {
+      if (url === "/en.vtt") return new Response("WEBVTT\n\n00:02:00.000 --> 00:02:01.000\nAligned phrase\n");
+      if (url === "/api/status") return Response.json({version:3,serverInstanceId:"instance",subtitleUrl:"/en.vtt",subtitleDelay:manualDelay});
+      if (url === "/api/subtitle-sync") return Response.json(options.method === "POST"
+        ? {state:"ready",result:{start:100,end:150,offset:1,anchors:6,residual:0.1}} : {available:true});
+      throw Error("Unexpected request");
+    } });
+  await settle(); instance.callbacks.tracks();
+  h.video.currentTime = 121.5;
+  await h.parts["subtitle-sync"].emit("click"); await settle();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.root.dataset.subtitleState,"ready");
+  assert.equal(h.parts["subtitle-sync"].attributes["aria-pressed"],"true");
+  assert.equal(h.parts["subtitle-sync-status"].textContent,"Tramo sincronizado");
+  assert.equal(h.parts.caption.textContent,"Aligned phrase","saved -2s must not offset the automatic match");
+  assert.equal(h.root.dataset.currentDelay,"0");
+  manualDelay = -1;
+  await h.player.pollStatus();
+  assert.equal(h.root.dataset.currentDelay,"1","a later +1s manual change still shifts automatic timing");
+  h.video.currentTime = 122.5; await h.video.emit("timeupdate");
+  assert.equal(h.parts.caption.textContent,"Aligned phrase");
+  await h.parts["subtitle-sync"].emit("click"); await settle();
+  assert.equal(h.root.dataset.currentDelay,"-1","disabling auto restores ordinary manual timing");
 });

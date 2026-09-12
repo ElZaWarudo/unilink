@@ -228,6 +228,7 @@ export function startAudioPlayback({ video, select, url, onError, onRecovered = 
   let recoveryAttempted = false;
   let recoveryPosition = null;
   let recoveryFrames = null;
+  let resumeAfterAttach = false;
   const renderedFrames = () => {
     try {
       const quality = video.getVideoPlaybackQuality?.();
@@ -300,21 +301,40 @@ export function startAudioPlayback({ video, select, url, onError, onRecovered = 
     if (time > 0) video.currentTime = time;
     if (playing) video.play().catch(() => onError("Pulsa Reproducir para continuar con la pista elegida."));
   };
-  const recover = () => {
+  const captureRecovery = () => {
+    if (recoveryPosition !== null) return;
+    recoveryPosition = video.currentTime;
+    recoveryFrames = renderedFrames();
+    resumeAfterAttach = !video.paused;
+  };
+  const attached = () => {
+    if (disposed || recoveryPosition === null || !resumeAfterAttach) return;
+    resumeAfterAttach = false;
+    video.play().catch(error => {
+      if (!disposed && error.name !== "AbortError") onError("Pulsa Reproducir para continuar.");
+    });
+  };
+  const failRecovery = (error) => {
+    hls.stopLoad();
+    video.pause?.();
+    recoveryPosition = null;
+    resumeAfterAttach = false;
+    pendingError = error;
+    if (select) select.disabled = true;
+    onError("No se pudo reproducir con audio compatible. Comprueba que Stremio sigue abierto y actualizado, y pulsa Reintentar.");
+  };
+  const recover = (explicitResume = false) => {
     if (disposed || !hls || !pendingError || recoveryAttempted) return;
     const error = pendingError;
     if (!["networkError", "mediaError"].includes(error.type)) return;
     pendingError = null;
     recoveryAttempted = true;
-    recoveryPosition = video.currentTime;
-    recoveryFrames = renderedFrames();
+    captureRecovery();
+    if (explicitResume === true) resumeAfterAttach = true;
     if (error.type === "mediaError") {
-      const wasPlaying = !video.paused;
       hls.recoverMediaError();
       hls.startLoad(recoveryPosition);
-      if (wasPlaying) video.play().catch(error => {
-        if (!disposed && error.name !== "AbortError") onError("Pulsa Reproducir para continuar.");
-      });
+      if (!Hls.Events.MEDIA_ATTACHED) attached();
     }
     else if (["manifestLoadError", "manifestLoadTimeOut", "manifestParsingError"].includes(error.details)) {
       hls.loadSource(url);
@@ -332,6 +352,7 @@ export function startAudioPlayback({ video, select, url, onError, onRecovered = 
     recoveryPosition = null;
     recoveryAttempted = false;
     pendingError = null;
+    resumeAfterAttach = false;
     render();
     onRecovered();
   };
@@ -341,17 +362,31 @@ export function startAudioPlayback({ video, select, url, onError, onRecovered = 
     hls = new Hls({ enableWorker: false, backBufferLength: 30, maxBufferLength: 20 });
     hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, applyPreference);
     hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, sync);
+    if (Hls.Events.MEDIA_ATTACHED) hls.on(Hls.Events.MEDIA_ATTACHED, attached);
     hls.on(Hls.Events.ERROR, (_, data) => {
+      if (disposed) return;
+      // ErrorController in hls.js 1.7.2 has already reset MediaSource before
+      // this listener. The native error snapshot survives that detach/attach.
+      const resetMediaSourceFlag = 16; // hls.js 1.7.2 ErrorActionFlags.ResetMediaSource.
+      const libraryReset = data.details === "mediaSourceRequiresReset" || (data.errorAction?.flags & resetMediaSourceFlag);
+      if (libraryReset) {
+        if (recoveryAttempted) { failRecovery(data); return; }
+        captureRecovery();
+        recoveryAttempted = true;
+        pendingError = null;
+        // ErrorController stops loading after a fatal reset; restart loading
+        // at the saved position without performing a second MediaSource reset.
+        if (data.fatal) hls.startLoad(recoveryPosition);
+        return;
+      }
       if (data.fatal && !disposed) {
         hls.stopLoad();
-        recoveryPosition = null;
         pendingError = data;
-        if (!video.paused && !recoveryAttempted && ["networkError", "mediaError"].includes(data.type)) {
+        if ((!video.paused || resumeAfterAttach) && !recoveryAttempted && ["networkError", "mediaError"].includes(data.type)) {
           recover();
           return;
         }
-        if (select) select.disabled = true;
-        onError("No se pudo reproducir con audio compatible. Comprueba que Stremio sigue abierto y actualizado, y pulsa Reintentar.");
+        failRecovery(data);
       }
     });
     hls.loadSource(url);
@@ -376,9 +411,26 @@ export function startAudioPlayback({ video, select, url, onError, onRecovered = 
     onError("Este navegador no admite la reproducción con audio compatible. Usa un navegador con soporte HLS o MediaSource.");
   }
   return {
+    nativeError() {
+      if (!hls || disposed) return;
+      if (video.error?.code !== 3) {
+        recoveryAttempted = true;
+        failRecovery({ type: "otherError", details: "nativeMediaError" });
+        return;
+      }
+      const error = { type: "mediaError", details: "nativeMediaError" };
+      if (recoveryAttempted) { failRecovery(error); return; }
+      captureRecovery();
+      pendingError = error;
+    },
+    pause() { resumeAfterAttach = false; },
     resume() {
+      if (recoveryPosition !== null && !pendingError) {
+        resumeAfterAttach = true;
+        return;
+      }
       recoveryAttempted = false;
-      recover();
+      recover(true);
     },
     destroy() {
       if (disposed) return;
@@ -661,11 +713,13 @@ export function startPlayer(root) {
   let playbackFailure = "";
   let lastPositiveVolume = video.volume > 0 ? video.volume : 1;
   let actualAudio = { index: null, language: "" };
-  let syncedCues = [], syncEnabled = false;
+  let syncedCues = [], syncEnabled = false, syncManualBaseline = 0;
   const subtitleSync = createSubtitleSyncController({
     token: root.dataset.progressToken,
     onChange({ state, stage, elapsedMs, enabled, eligible, corrections }) {
+      if (enabled && !syncEnabled) syncManualBaseline = subtitleDelay;
       syncEnabled = enabled;
+      updateDelayState();
       syncedCues = enabled ? alignedSubtitleCues(cues, corrections) : cues;
       if (syncButton) {
         syncButton.disabled = !eligible;
@@ -944,12 +998,17 @@ export function startPlayer(root) {
   }
 
   function updateDelayState() {
-    root.dataset.currentDelay = String(subtitleDelay);
+    const delay = playbackSubtitleDelay();
+    root.dataset.currentDelay = String(delay);
     if (delayState) {
-      const sign = subtitleDelay > 0 ? "+" : "";
+      const sign = delay > 0 ? "+" : "";
       delayState.textContent =
-        `Sincronización ${sign}${subtitleDelay.toFixed(2).replace(".", ",")} s`;
+        `${syncEnabled ? "Ajuste sobre Auto-sync" : "Sincronización"} ${sign}${delay.toFixed(2).replace(".", ",")} s`;
     }
+  }
+
+  function playbackSubtitleDelay() {
+    return subtitleDelay - (syncEnabled ? syncManualBaseline : 0);
   }
 
   async function advanceMarathon() {
@@ -1123,7 +1182,7 @@ export function startPlayer(root) {
   function renderCaption() {
     const activeCue =
       captionsEnabled && captionsLoaded
-        ? cueAtTime(syncEnabled ? syncedCues : cues, video.currentTime, subtitleDelay)
+        ? cueAtTime(syncEnabled ? syncedCues : cues, video.currentTime, playbackSubtitleDelay())
         : null;
     const nextCaption = activeCue?.text ?? "";
     if (nextCaption === lastCaption) {
@@ -1237,6 +1296,7 @@ export function startPlayer(root) {
         }
       }
     } else {
+      audioPlayback?.pause();
       video.pause();
     }
   }
@@ -1510,6 +1570,7 @@ export function startPlayer(root) {
   });
   video.addEventListener("canplay", () => setMessage());
   video.addEventListener("error", () => {
+    audioPlayback?.nativeError();
     const reasons = { 2: "Se interrumpió la conexión del vídeo.",
       3: "El navegador no pudo decodificar el vídeo (error 3).",
       4: "El navegador no admite esta fuente de vídeo (error 4)." };

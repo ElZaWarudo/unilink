@@ -31,3 +31,19 @@ JavaScript tests cover shared-worker reuse, out-of-order request correlation, ca
 Final checks passed: 133 JavaScript tests, 15 Python tests, syntax checks and the real Windows process-tree smoke. Nine independent review lenses and a separate repair validator completed with no actionable findings remaining; the receipt is in `persistent-sync-code-review.json`. Additional frame-counter edge-case tests and a Python segment-failure lock-release test remain optional coverage improvements, not observed failures.
 
 After installing this build, verify two English alignment requests reuse the worker, cancellation settles, and closing Unilink releases it. On the TV, verify error/retry preserves the video surface and picture recovery; retain the displayed error category if decoding still fails. Roll back if the new worker leaves persistent children after shutdown or causes repeatable playback regression. The running installed application is not replaced by these source changes.
+
+## Follow-up: decoder recovery and saved manual timing
+
+The next TV report showed native decoding error 3 at 2:28 while recognition was running. The live player status also reported a saved manual delay of -2 seconds. The preceding implementation deliberately added this manual delay to automatic corrections; the user explicitly chose to have automatic timing replace the existing adjustment instead.
+
+The served player asset matched the preceding reviewed commit `1a67b75` after newline normalization, ruling out an older player asset as the cause of this report.
+
+Each player now captures the manual baseline when autosync is enabled and subtracts it while auto remains enabled. Later manual changes fine-tune that automatic timing relatively. Disabling auto restores ordinary manual timing; this does not rewrite shared PC settings. A DOM integration test verifies the spoken cue is visible at its corrected time, a subsequent +1-second adjustment works, and disabling restores manual timing.
+
+The installed hls.js 1.7.2 can reset MediaSource before notifying the application's error listener. The player previously paused on the native error but only tracked fatal HLS recovery. A library-managed nonfatal reset therefore lost play intent and never armed the frame-progress check: even successful playback left the error overlay active. An isolated reproduction confirmed that sequence using the real player and the library's documented event ordering.
+
+Recovery now captures position, frame evidence and play intent before the reset, handles library-managed resets without duplicating them, and resumes after attachment only when requested. Deliberate pause and a Play request during attachment are covered. Repeated failure stops recovery until an explicit retry. Errors clear on video progress; browsers without frame counters retain the existing width/time fallback. Non-decoding native errors remain terminal.
+
+The initial TV decoder fault is still unproven: these checks establish the application recovery defect, not the physical TCL decoder's failure mechanism. Actual TV playback after updating remains required. This follow-up does not claim to change speech-model accuracy or extend verified alignment beyond the matched sections.
+
+Follow-up quality: simplification removed one redundant recovery flag; 136 JavaScript tests and syntax checks pass. Targeted independent review of the three fix-owned code/test files found no actionable regression and independently passed 30 player tests. HLS callbacks are simulated in those tests; real browser MediaSource/play-promise ordering and library resets without a preceding native error remain coverage limitations. Previous release commits and user attachments were excluded from this review. The fix remains local until explicitly published.

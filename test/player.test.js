@@ -91,6 +91,58 @@ test("recuerda la pista por idioma y nombre sin reutilizar índices de otro epis
   assert.equal(preferredAudioTrack(tracks, { lang: "fra" }), -1);
 });
 
+test("native HLS errors preserve intent through fatal recovery and an explicit pause cancels attachment resume", () => {
+  let instance;
+  class FakeHls {
+    static isSupported = () => true;
+    static Events = { AUDIO_TRACKS_UPDATED: "tracks", AUDIO_TRACK_SWITCHED: "switched", ERROR: "error", MEDIA_ATTACHED: "attached" };
+    constructor() { instance = this; this.callbacks = {}; this.resets = 0; }
+    on(event, fn) { this.callbacks[event] = fn; }
+    loadSource() {}
+    attachMedia() {}
+    stopLoad() {}
+    startLoad(position) { this.position = position; }
+    recoverMediaError() { this.resets++; video.paused = true; video.currentTime = 0; }
+    destroy() {}
+  }
+  let frames = 100; let recovered = 0;
+  const video = Object.assign(new EventTarget(), { currentTime: 120, paused: false, videoWidth: 1920, error: { code: 3 },
+    pause() { this.paused = true; }, play: async () => { video.paused = false; },
+    getVideoPlaybackQuality: () => ({ totalVideoFrames: frames, droppedVideoFrames: 0 }),
+  });
+  const playback = startAudioPlayback({ video, url: "/master.m3u8", Hls: FakeHls, onError() {}, onRecovered() { recovered++; } });
+  playback.nativeError(); video.pause();
+  instance.callbacks.error(null, { fatal: true, type: "mediaError" });
+  assert.equal(instance.resets, 1); assert.equal(instance.position, 120);
+  assert.equal(video.paused, true, "wait for MediaSource attachment before play");
+  playback.pause(); instance.callbacks.attached();
+  assert.equal(video.paused, true, "an explicit pause overrides pre-error playing intent");
+  video.currentTime = 125; frames = 101; video.dispatchEvent(new Event("timeupdate"));
+  assert.equal(recovered, 0, "paused playback is not recovery evidence");
+  playback.resume(); video.paused = false; video.dispatchEvent(new Event("play"));
+  video.dispatchEvent(new Event("timeupdate")); assert.equal(recovered, 1);
+  video.paused = true; playback.nativeError();
+  instance.recoverMediaError();
+  instance.callbacks.error(null, { fatal: false, type: "mediaError", details: "mediaSourceRequiresReset" });
+  assert.equal(video.paused, true, "failure during a user pause stays paused");
+  const pausedResets = instance.resets;
+  playback.pause();
+  playback.resume(); instance.callbacks.attached();
+  assert.equal(video.paused, false, "explicit resume during attachment restores play intent");
+  assert.equal(instance.resets, pausedResets, "resume does not duplicate an in-flight reset");
+  video.paused = false; video.currentTime = 130; frames = 102;
+  video.dispatchEvent(new Event("timeupdate"));
+  playback.nativeError(); video.pause(); instance.recoverMediaError();
+  const resets = instance.resets;
+  instance.callbacks.error(null, { fatal: true, type: "mediaError", errorAction: { flags: 16 } });
+  assert.equal(instance.position, 130, "a fatal library reset restarts loading at the pre-error position");
+  assert.equal(instance.resets, resets, "fatal library reset must not be duplicated");
+  instance.callbacks.attached(); assert.equal(video.paused, false);
+  instance.callbacks.error(null, { fatal: true, type: "mediaError", errorAction: { flags: 16 } });
+  instance.callbacks.attached(); assert.equal(video.paused, true, "a second reset cannot restore play intent");
+  playback.destroy(); instance.callbacks.attached(); assert.equal(video.paused, true);
+});
+
 test("cambia el audio sin reiniciar el vídeo y libera HLS al salir", (t) => {
   const oldDocument = globalThis.document;
   const oldStorage = globalThis.localStorage;
@@ -179,7 +231,7 @@ test("reanuda la carga HLS tras un fallo durante la pausa sin perder posición",
   playback.resume();
   assert.equal(instance.recovered, true, "repara MediaSource antes de solicitar play");
   assert.equal(instance.startPosition, 125);
-  assert.equal(video.paused, true, "recuperar una pausa no reproduce por sí solo");
+  assert.equal(video.paused, false, "reanudar explícitamente conserva la intención de reproducir");
   video.paused = false;
   video.currentTime = 128;
   frames = 3;
