@@ -414,7 +414,7 @@ export function alignedSubtitleCues(cues, corrections) {
     const clientId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   let context = {}, enabled = false, disposed = false, generation = 0;
   let jobId = null, timer = null, busy = false, corrections = [], state = "off";
-  let attempted = new Set(), retryAfter = 0, position = 0, duration = 0, pendingBucket = null;
+  let attempted = new Map(), retryAfter = 0, position = 0, duration = 0, pendingBucket = null;
   const headers = { "content-type": "application/json", "x-unilink-token": token };
   const eligible = () => context.captions && isEnglishLanguage(context.subtitleLanguage) &&
     Number.isInteger(context.audioIndex) && context.audioIndex >= 0 &&
@@ -454,6 +454,7 @@ export function alignedSubtitleCues(cues, corrections) {
           if (state !== "working") emit("working");
         timer = setTimer(() => { timer = null; run(time, bucket, epoch, true); }, 1000);
       } else {
+        attempted.set(bucket, result.state);
         pendingBucket = null;
         jobId = null;
         if (result.state === "ready" && result.result &&
@@ -472,10 +473,10 @@ export function alignedSubtitleCues(cues, corrections) {
   const controller = {
     setContext(next) {
       if (JSON.stringify(next) === JSON.stringify(context)) return;
-      cancel(); context = { ...next }; corrections = []; attempted = new Set(); enabled = false; emit("off");
+      cancel(); context = { ...next }; corrections = []; attempted = new Map(); enabled = false; emit("off");
     },
     async setEnabled(value) {
-      cancel(); corrections = []; attempted = new Set(); retryAfter = 0;
+      cancel(); corrections = []; attempted = new Map(); retryAfter = 0;
       enabled = Boolean(value && eligible() && !disposed);
       if (!enabled) { emit("off"); return; }
       const epoch = generation; busy = true; emit("working");
@@ -499,12 +500,18 @@ export function alignedSubtitleCues(cues, corrections) {
         target = Math.min(duration - 1, coverage.end + coverage.offset + 1);
       } else if (state === "ready") emit("waiting");
       const bucket = Math.floor(target / 60);
-      if (attempted.has(bucket)) return;
-        while (attempted.size >= 32) attempted.delete(attempted.values().next().value);
-        attempted.add(bucket); emit("working"); run(target, bucket, generation);
+      if (attempted.has(bucket)) {
+        const settled = coverage ? "ready" : attempted.get(bucket) === "insufficient" ? "insufficient" : "waiting";
+        if (state !== settled) emit(settled);
+        return;
+      }
+        while (attempted.size >= 32) attempted.delete(attempted.keys().next().value);
+        attempted.set(bucket, "working"); emit("working"); run(target, bucket, generation);
     },
     seek(time, total) {
-      cancel(); controller.tick(time, total);
+      cancel();
+      if (enabled && state === "working") emit("waiting");
+      controller.tick(time, total);
     },
     destroy() { cancel(); disposed = true; enabled = false; corrections = []; emit("off"); },
   };
@@ -648,7 +655,7 @@ export function startPlayer(root) {
           cue.start >= latest.start && cue.end <= latest.end && syncedCues[index].start !== cue.start);
         const labels = {
           off: eligible ? "" : "Requiere subtítulos y audio en inglés",
-          waiting: "Esperando diálogo…", working: "Sincronizando este tramo…",
+          waiting: "Esperando diálogo…", working: "Sincronizando este tramo… Puede tardar hasta 3 minutos",
           ready: "Tramo sincronizado", insufficient: "Sin coincidencia fiable; se conserva el tiempo original",
           busy: "Motor ocupado; se reintentará", unavailable: "Usa «Configurar en el PC» para instalar el motor en el PC que ejecuta Unilink",
           error: "No se pudo sincronizar. Desactiva y activa para reintentar",

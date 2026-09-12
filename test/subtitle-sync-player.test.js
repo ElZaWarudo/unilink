@@ -172,3 +172,35 @@ test("seeking within a pending minute cancels and retries that minute", async ()
   assert.equal(h.timers.size, 1);
   h.controller.destroy();
 });
+
+test("seeking back to an insufficient minute does not leave a cancelled job working", async () => {
+  let state = "insufficient";
+  const h = harness(async (_url, options) => options.method === "DELETE"
+    ? { state: "cancelled" } : { state, jobId: state === "working" ? "pending" : undefined });
+  await h.controller.setEnabled(true); await flush();
+  state = "working";
+  h.controller.tick(80, 900); await flush();
+  assert.equal(h.changes.at(-1).state, "working");
+  h.controller.seek(20, 900); await flush();
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.changes.at(-1).state, "insufficient");
+  h.controller.destroy();
+});
+
+test("revisiting a ready minute restores status according to verified coverage", async () => {
+  for (const [position, expected] of [[5, "waiting"], [40, "ready"]]) {
+    let state = "ready";
+    const h = harness(async (_url, options) => options.method === "DELETE"
+      ? { state: "cancelled" } : { state, result: state === "ready" ? correction : undefined,
+        jobId: state === "working" ? "pending" : undefined });
+    await h.controller.setEnabled(true); await flush();
+    state = "working";
+    h.controller.tick(80, 900); await flush();
+    h.controller.seek(position, 900); await flush();
+    assert.equal(h.changes.at(-1).state, expected);
+    assert.deepEqual(h.changes.at(-1).corrections, [correction]);
+    assert.equal(h.requests.filter(request => request.method === "POST").length, 2);
+    assert.equal(h.timers.size, 0);
+    h.controller.destroy();
+  }
+});

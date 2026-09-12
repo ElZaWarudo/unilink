@@ -140,6 +140,32 @@ Checks: 12 Python tests, 71 existing Node tests, and `npm run check` passed.
 Independent code review completed with no outstanding findings after rejecting
 overlapping sample intervals. Human-verified timing accuracy remains unmeasured.
 
+## Follow-up: stuck status after seeking (2026-09-12)
+
+A controller regression reproduced an orphaned working status: a minute returned
+`insufficient`, another minute started recognition, and seeking back cancelled
+that job but retained its working label. The player now remembers each attempted
+minute's outcome and restores a settled status when revisiting it. Cancelling work
+also clears its working status when the new position cannot start a job. The
+processing message explains the existing three-minute job limit.
+
+The installed engine was checked again through the real HTTP job API at 08:30.
+It completed in 85 seconds with 21 anchors, offset +1.440 seconds, and median
+held-out anchor residual 0.1645 seconds. A separate local worker run moved a copy
+of all subtitle timestamps three seconds later while keeping the same audio.
+It completed in 140 seconds and recovered offset -1.560 seconds with the same
+21 anchors and residual. The player applied this result to 29 cues, and caption
+lookup at a corrected onset returned the expected text. No source subtitles or
+installed-player settings were changed by this corruption test.
+
+These checks establish recovery of a controlled timing error on one dialogue
+section, not human-verified onset accuracy across releases. Sparse dialogue,
+music and mismatched subtitle wording still require a conservative insufficient
+result. The focused seek regressions, 118 JavaScript tests, 10 Python tests and
+JavaScript syntax checks passed. Independent correctness, testing, reliability,
+frontend race and adversarial reviews found no actionable defects. A new visual
+browser check was unavailable because the test webview could not attach.
+
 ## Before player integration
 
 Measure real extraction and recognition time; inspect audible cue onsets against
