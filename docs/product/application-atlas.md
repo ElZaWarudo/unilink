@@ -1,8 +1,8 @@
 ---
 atlas_schema_version: 1
 status: "draft"
-verified_source_commit: "8a320b988b4861e545967aab8edab2eb1c38a4e9"
-application_fingerprint: "sha256:187d208df45074b73eaceb65106600e79a921d83646bcd0b289bd5e44a52a0e1"
+verified_source_commit: "64c910b2223b984b5f1ca9b07ce111c7d68e40e5"
+application_fingerprint: "sha256:33ff5add98dfc4bc41f871902417770c34733f7cb44ce2dc2632c0802e88f675"
 tracked_paths: ["src", "src-tauri", "desktop", "assets", "scripts", "test", "README.md", "package.json", "package-lock.json", "start-unilink.cmd", "start-unilink.sh", ".github"]
 excluded_paths: ["docs/product/application-atlas.md", "docs/audits", "src-tauri/gen", "src-tauri/target", "src-tauri/binaries", "src-tauri/icons/android", "src-tauri/icons/ios"]
 last_verified_at: "2026-09-12"
@@ -10,7 +10,7 @@ last_verified_at: "2026-09-12"
 
 # Application Atlas
 
-This baseline records source exploration at the commit above. **Declared** means README or user intent; **Code** means implementation inspected, not reproduced here; **Observed** requires runtime evidence; **Inferred** is a hypothesis; **Unverified** is an explicit gap. Paths below are repository-relative evidence references. Lead-provided runtime observations are recorded below and in `docs/product/polish-evidence.md`; they were not reproduced independently by the cartographer. The lead accepts reduced evaluation scope: source coverage across declared platforms and browser runtime on Windows, with Linux/native installation/accessibility gaps explicit. Pending distribution intent does not block that scoped audit.
+This atlas records source facts and bounded verification at the commit above. **Declared** means README or user intent; **Code** means implementation inspected, not reproduced here; **Observed** requires runtime evidence; **Inferred** is a hypothesis; **Unverified** is an explicit gap. Paths below are repository-relative evidence references. Lead-provided runtime observations are recorded below and in `docs/product/polish-evidence.md`; they were not reproduced independently by the cartographer. The lead accepts reduced evaluation scope: source coverage across declared platforms and browser runtime on Windows, with Linux/native installation/accessibility gaps explicit. Historical baseline observations remain labeled separately.
 
 ## 1. Intent
 
@@ -30,7 +30,7 @@ This baseline records source exploration at the commit above. **Declared** means
 | PLAT-02 | Linux desktop host | Declared | AppIndicator tray, default browser | AppIndicator support; native build dependencies; Linux package built on Linux | README; src-tauri/Cargo.toml |
 | PLAT-03 | LAN browser viewer | Declared | Mouse, keyboard, touch | MediaSource/HLS.js or native HLS; same trusted network | README; src/player.js |
 | PLAT-04 | Direct Node developer server | Code | CLI and browser | Node >=20; default bind 0.0.0.0:17891; data/config.json unless overridden | src/index.js; package.json |
-| PLAT-05 | Speech host runtime | Code | Optional setup command | Python >=3.10; downloaded base.en model; FFmpeg/FFprobe; CPU worker | scripts/setup-subtitle-sync.js; src/speech/worker.py |
+| PLAT-05 | Speech host runtime | Code | Optional host setup page or developer command | Python >=3.10; downloaded base.en model; FFmpeg/FFprobe; CPU worker | src/speech-setup.js; src/speech/worker.py |
 | PLAT-06 | macOS/mobile native application | Unverified / not declared | Icon assets exist | Tauri contains generic icon assets; no declared support or reproduced package | src-tauri/icons; README |
 
 ## 3. Actors and permissions
@@ -49,14 +49,14 @@ There are no plan, tenant, password-login, billing, or application-user roles in
 | ID | Surface | Entry | Exits/return | Roles | Route/window | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | SURF-01 | Native tray | Launch executable | Configure, install, watch, copy URL, start/stop/restart, quit | ACT-01 | No normal native window | Code: src-tauri/src/lib.rs; tauri.conf.json windows=[] |
-| SURF-02 | Configuration | First launch or tray/browser link | Save to same page; Stremio protocol install; external account link | ACT-01 | GET/POST /configure | Code: src/pages.js configurationPage |
-| SURF-03 | Source activation and handoff | Stremio decorated result | Copy/open watch URL; apply subtitles; close tab | ACT-01, ACT-03 | GET /activate/:id; POST /settings | Code: activationPage; src/server.js |
-| SURF-04 | Waiting screen | Stable URL with no active source | Periodic reload becomes active player | ACT-02 | GET /watch | Code: watchPage; 3-second waiting reload |
+| SURF-02 | Configuration | First launch or tray/browser link | Save with inline feedback; stable viewer URL copy/open; Stremio protocol install; optional account and speech setup | ACT-01 | GET/POST /configure; /api/speech-setup | Code: src/pages.js configurationPage; src/speech-setup.js |
+| SURF-03 | Source activation and handoff | Stremio decorated result | Copy/open watch URL; preparation status; apply subtitles; close tab | ACT-01, ACT-03 | GET /activate/:id redirects to GET /session; POST /settings | Code: activationPage; src/server.js |
+| SURF-04 | Waiting screen | Stable URL with no active source | Bounded status polling becomes active player | ACT-02 | GET /watch | Code: watchPage; reload only when active |
 | SURF-05 | Active player | /watch with active source | Playback controls; compatibility disclosure; source-change reload | ACT-02 | GET /watch; /player.js; /hls.js | Code: watchPage; startPlayer |
-| SURF-06 | Episode queue/countdown | Series active on player | Reorder/remove, next episode, autoplay toggle/cancel | ACT-02 | Embedded on /watch | Code: marathonPanel; src/player.js |
+| SURF-06 | Episode queue/countdown | Series active on player | Reorder/remove/undo last removal, next episode, autoplay toggle/cancel; busy feedback and focus continuity | ACT-02 | Embedded on /watch | Code: marathonPanel; src/player.js |
 | SURF-07 | Error page | Invalid/forbidden/not-found request | Return to /watch | All | Server-generated HTML | Code: errorPage |
 | SURF-08 | Add-on API | Installation/discovery | Stremio source list and activation browser | ACT-03 | /manifest.json; /stream/(movie|series)/:id.json | Code: src/server.js; src/streams.js |
-| SURF-09 | Media and state APIs | Player/host integrations | JSON/media consumed by callers | ACT-01/02/03 | /api/status; /media; /hls/:instance/:version/*; /subtitle/:index.vtt; /api/progress; /api/subtitle-sync; /api/marathon/*; /api/stremio/* | Code: src/server.js; src/stremio-routes.js |
+| SURF-09 | Media and state APIs | Player/host integrations | JSON/media consumed by callers | ACT-01/02/03 | /api/status; /media; /hls/:instance/:version/*; /subtitle/:index.vtt; /api/progress; /api/subtitle-sync; /api/speech-setup; /api/marathon/*; /api/stremio/* | Code: src/server.js; src/stremio-routes.js |
 
 desktop/index.html is an empty Spanish-language frontend asset; actual user pages are rendered by the Node server. No separate search/library/catalog surface exists in inspected source.
 
@@ -75,30 +75,30 @@ desktop/index.html is an empty Spanish-language frontend asset; actual user page
 
 ### FLOW-01 — Onboard and install
 - Preconditions: Host app and Stremio installed; configured Torrentio manifest available.
-- Before/during/after [Code]: Missing saved manifest opens browser onboarding after server readiness; URL form normalizes HTTP(S)/stremio protocol and manifest suffix; POST persists then redirects with saved notice; install link opens stremio protocol.
-- Failure/recovery [Code]: Inline invalid/save error retains input; user can resubmit. Native startup errors go to stderr; tray status reflects server availability.
+- Before/during/after [Code]: Missing saved manifest opens browser onboarding after server readiness; URL form normalizes HTTP(S)/stremio protocol and manifest suffix; POST returns JSON for enhanced save or redirects for normal form navigation. Setup provides the stable viewer URL, copy/open actions and Unilink source-selection steps. Account linking and speech setup are optional.
+- Failure/recovery [Code]: Pending save and inline result retain input; user can resubmit. Native startup failures remain visible in the tray with bounded repair guidance.
 - Data/context: Manifest URL in host config; save merges other preferences. External protocol installation success is Unverified.
 
 ### FLOW-02 — Select and hand off
 - Preconditions: Configured add-on and a supported HTTP(S) source or torrent info hash.
-- Before/during/after [Code]: Stream discovery decorates candidates; loopback activation changes active source/version, loads subtitles and series metadata; handoff page supplies persistent LAN URL. Waiting viewers reload; active viewers poll status.
+- Before/during/after [Code]: Stream discovery decorates candidates; loopback activation changes active source/version and redirects to read-only /session while optional subtitles and metadata load in the background. Handoff reports preparation and supplies persistent LAN URL. Waiting and active viewers poll status with bounded requests.
 - Failure/recovery [Code]: Upstream discovery returns empty streams with warning header; subtitles/metadata may leave warnings; missing candidate becomes error page. Selecting a different source restarts flow.
 - Data/context: Candidates and source/queue are process memory; activation affects all viewers. Copy fallback selects text if clipboard fails.
 
 ### FLOW-03 — Play and resume
 - Preconditions: Active source; Stremio HLS service reachable; supported browser.
 - Before/during/after [Code]: Browser prepares HLS audio, exposes play/pause/seek/volume/audio/CC/fullscreen, stores per-content resume position and per-browser audio preference. Native HLS selects playlist audio; HLS.js chooses track.
-- Failure/recovery [Code]: Preparation error offers Reintentar and compatibility help; storage exceptions do not stop playback; stale versioned media requests return 409. Local resume is not imported from Stremio.
+- Failure/recovery [Code]: Preparation error offers Reintentar and compatibility help; failure text has separate space above controls. Controls remain visible while paused, ended or failed. Storage exceptions are reported separately from account progress and do not stop playback; stale versioned media requests return 409. Local resume is not imported from Stremio.
 - Data/context: Media crosses host-to-browser LAN; localStorage retains position/audio. Source identity and server instance invalidate stale playback context.
 
 ### FLOW-04 — Subtitle preference and timing
 - Preconditions: Discovered tracks for selected content.
 - Before/during/after [Code]: Host chooses language/source and delay; applies settings; active viewer receives update and displays custom captions. Viewer CC toggles caption visibility.
-- Failure/recovery [Code]: No-track text; failed settings status allows resubmit; subtitle loading failure disables captions. Delay stepper resets to zero.
+- Failure/recovery [Code]: No-track text; failed settings status allows resubmit; stale source/session forms return 409 without changing the current source. Subtitle loading failure exposes a bounded same-track retry without restarting media. Delay stepper resets to zero.
 - Data/context: Host preference persists language, ID, source index, delay; source alternatives filtered by selected language. Manual delay bounded ±30 seconds.
 
 ### FLOW-05 — English speech matching
-- Preconditions: Optional engine installed; English subtitles and English or unknown-language audio; opt-in at current screen.
+- Preconditions: Optional engine installed through host configuration or developer command; Python >=3.10 on the host; English subtitles and English or unknown-language audio; opt-in at current screen.
 - Before/during/after [Code]: API checks availability; one host job analyzes up to 120 seconds, uses recognized phrase anchors, and returns bounded correction without transcript. Corrected cues apply only in supported region; manual delay adds to result.
 - Failure/recovery [Code]: Busy, unavailable, insufficient, stale, cancelled, and error outcomes; pending work cancelled on seek/source/track change or opt-out; uncertain sections retain original timings.
 - Data/context: Temporary host audio/subtitles cleaned after job; 32-job host cache and 32-correction client cap; 180-second job deadline; local per-screen opt-in is not persisted.
@@ -106,8 +106,8 @@ desktop/index.html is an empty Spanish-language frontend asset; actual user page
 ### FLOW-06 — Series queue
 - Preconditions: Standard IMDb series ID; metadata and source provider available.
 - Before/during/after [Code]: Prepares default five next episodes and up to three sources each; viewer reorders/removes; ten-second default countdown can be cancelled; advance changes shared active source and refills queue.
-- Failure/recovery [Code]: Unprepared entries and warnings remain visible; stale expected-next ID returns 409; current episode continues on preparation failure.
-- Data/context: Autoplay/countdown/queue-size preference persists; queue itself is process memory. Reordering/removing affects all viewers; no persistent undo history.
+- Failure/recovery [Code]: Unprepared entries and warnings remain visible; mutations show busy state and preserve queue focus. Origin and source/session guards reject stale writes; current episode continues on preparation failure. Last removal can be undone until a new source is activated.
+- Data/context: Autoplay/countdown/queue-size preference persists; queue and single-removal undo are process memory. Reordering/removing affects all viewers; undo may temporarily restore one episode above the target queue size after refill.
 
 ### FLOW-07 — Stremio account/progress
 - Preconditions: Host operator can approve external Stremio device link; playback identity valid.
@@ -117,8 +117,8 @@ desktop/index.html is an empty Spanish-language frontend asset; actual user page
 
 ### FLOW-08 — Host lifecycle
 - Preconditions: Running native app.
-- Before/during/after [Code]: Single-instance plugin; tray probes status and enables actions by running/owned state; launches bundled Node sidecar; stop/restart kills owned child; quit exits app.
-- Failure/recovery [Code]: Start/restart errors logged to stderr; menu state refreshed. No configured autostart or updater found.
+- Before/during/after [Code]: Single-instance plugin; serialized background lifecycle operations; starting/running/stopping/stopped/failure tray states; external-server ownership guards; owned Windows process-tree termination and async quit cleanup. Release Windows executable requests the GUI subsystem.
+- Failure/recovery [Code]: Bounded tray reasons distinguish port conflict, missing server, data-folder and startup failure; retry remains available. No configured autostart or updater found. Linux descendant cleanup and live tray interaction remain unverified.
 - Data/context: Persistent config survives process restart; active source/queue and transient jobs do not. Install/upgrade/uninstall behavior is Unverified.
 
 ## 6. State catalog
@@ -133,8 +133,9 @@ desktop/index.html is an empty Spanish-language frontend asset; actual user page
 | STATE-06 | Auto-sync | Disabled, ready, working, busy, insufficient, unavailable, error, stale | Opt-in state, bounded corrections, recovery messages | Code | subtitle-sync.js; controller |
 | STATE-07 | Queue | Prepared, unavailable, empty, countdown, cancelled, stale advance | Visible status and available controls | Code | marathonPanel; registry |
 | STATE-08 | Network/permissions | Upstream offline, LAN admin rejection, stale media URL | Error/status with recovery where provided | Code | server.js; stremio-routes.js |
-| STATE-09 | Tray | Starting, running owned, running external, stopped | Status and enabled action changes | Code | lib.rs MenuState |
-| STATE-10 | Extreme content/input | Long labels, many tracks, narrow viewport, keyboard/screen reader | Runtime behavior not reproduced here | Unverified | CSS/control implementation exists; no atlas runtime sample |
+| STATE-09 | Tray | Starting, running owned, running external, stopping, stopped, failed | Serialized actions; bounded error/retry; quit waits for cleanup; external ownership respected | Code/unit tests | lib.rs Lifecycle; actual native interaction unverified |
+| STATE-10 | Extreme content/input | Long labels, many tracks, narrow viewport, keyboard/screen reader | Narrow layout and keyboard focus observed; long-label/high-volume/AT behavior remains unverified | Partial | Lead browser samples; CSS/control implementation |
+| STATE-11 | Speech setup | Idle, checking, environment, dependencies, model, verifying, ready, error | Fixed installation stages, bounded local runtime probe, repair/retry; host-only administrative route | Code/tests and simulated browser installer | src/speech-setup.js; pages.js; server.js |
 
 ## 7. Data and context lifecycle
 
@@ -186,8 +187,8 @@ No payment, publication, production database, or cloud deployment interface appe
 
 | Platform/flow | Keyboard | Touch | Focus | Back/deep link | Reduced motion | Assistive tech | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Web forms | Native form controls | Responsive CSS | Focus-visible styles | Configure and activation routes | CSS reduced-motion rule | Labels, alerts/status regions | Code: pages.js; runtime unverified |
-| Player | Space/play, F/fullscreen and keyboard handlers | Double-tap ±10 sec; fullscreen tap controls | Focusable player and controls | /watch stable; reload on source change | CSS reduced-motion rule | ARIA names/status; visual caption element aria-hidden | Code: player.js; pages.js; runtime unverified |
+| Web forms | Native form controls | Responsive CSS | Focus-visible styles | Configure and activation routes | CSS reduced-motion rule | Labels, alerts/status regions | Code: pages.js; inline save and status recovery observed; actual AT unverified |
+| Player | Space/play, F/fullscreen and keyboard handlers | Double-tap ±10 sec; fullscreen tap controls | Focusable player and controls | /watch stable; reload on source change | CSS reduced-motion rule | ARIA names/status; visual caption element aria-hidden | Code: player.js; pages.js; desktop/narrow/keyboard samples observed; physical touch/AT unverified |
 | Queue | Native buttons | Click/tap buttons | Dynamic updates | Embedded watch surface | CSS shared rule | Button labels include episode titles; countdown live region | Code: pages.js; player.js |
 | Native tray | OS menu conventions | OS-dependent | OS-managed | Protocol/default-browser launch | Not applicable to static menu | OS tray menu semantics | Code: lib.rs; actual AT unverified |
 
@@ -200,22 +201,23 @@ Lead runtime sample [Observed, reported 2026-09-12; baseline 8a320b9]: `/configu
 | Declared product/platforms | covered | README and user request | 2026-09-12 | Release audience remains open |
 | Reachable routes/surfaces | covered for source inventory | src/server.js, pages.js, lib.rs | 2026-09-12 | Runtime walkthrough pending |
 | Primary flows/persistence/integrations | partial | Source and test-file inventory | 2026-09-12 | Reproduce with isolated fixtures and real playback |
-| Automated tests | partial | test/*.test.js; speech/test_alignment.py; Rust tests present | 2026-09-12 | This cartography pass did not execute them |
+| Automated tests | covered for existing candidate suites | Lead receipts: 116 JavaScript, 10 Python speech and 8 release-profile Rust tests passed; syntax/format passed | 2026-09-12 | Test harnesses do not replace the platform/runtime gaps below |
 | Empty/loading/error/extreme/volume | partial | Code states and explicit bounds | 2026-09-12 | Runtime samples needed; not claimed as tested |
-| Desktop/narrow/keyboard/touch/AT | unverified | CSS and input handlers mapped | 2026-09-12 | Browser/device matrix and assistive-tech check |
-| Windows packaging/install/lifecycle | partial | Tauri config, sidecar script and Rust source | 2026-09-12 | Build/install/upgrade/quit checks |
+| Desktop/narrow/keyboard/touch/AT | partial | Real browser desktop/narrow layout, paused/fullscreen controls, volume recovery and queue focus | 2026-09-12 | Physical touch/device matrix and actual assistive-tech check |
+| Windows packaging/install/lifecycle | partial | Optimized 0.2.0 native build, MSI/NSIS, GUI PE subsystem and packaged-server smoke passed | 2026-09-12 | Actual native tray and clean-machine install/upgrade/quit checks |
 | Linux package and tray/browser | unverified | Declared support; build paths | 2026-09-12 | Linux environment evidence |
-| Distribution/release automation | partial | package.json and Tauri config version 0.1.0; no .github directory at baseline | 2026-09-12 | Signing, installer provenance, distribution destination unverified |
+| Distribution/release automation | partial | package.json and Tauri config version 0.2.0; no .github directory at baseline | 2026-09-12 | Local Windows candidate; signing and distribution destination unverified |
 | Live external account mutation | unverified | Local test suites exist | 2026-09-12 | Do not perform without authorized safe account |
 | Public Internet hosting/native mobile | out-of-scope for declared promise | README trusted-LAN constraint | 2026-09-12 | New intent required to change scope |
 
 ## 13. Open intent questions and conflicts
 
 - Who receives the release and which host platforms must be release-tested? Owner: product-polish lead/user; user requested deployment direction without distribution details.
-- Does final-product scope require installing the optional speech engine without a developer checkout? README currently documents an npm setup command while the standard desktop install promises no Node/terminal requirement. These apply to different documented installation paths; intended optional-feature onboarding is unconfirmed.
+- Optional speech installation now has an in-product host path without a developer checkout. Python 3.10+ and Stremio remain explicit prerequisites; clean-machine installation still needs verification.
 - Success tolerances for playback startup, recovery time, and subtitle timing have not been declared. Prior speech verification belongs to separate evidence and is not reproduced by this cartography pass.
-- README/UI naming differs: README says Unilink results; activation/waiting instructions refer to «Servir en red». Both strings are present in source/documentation; current Stremio rendering requires a runtime sample.
+- Release UI now consistently names Unilink. The source-selection step inside Stremio itself still needs a native walkthrough.
 
 ## 14. Change log
 
 - 2026-09-12: Created source-grounded baseline for full-product polish. Stable IDs cover nine surfaces, eight flows, six platform dispositions, and four actor dispositions. Runtime verification remains explicitly partial/unverified; draft status is intentional.
+- 2026-09-12: Remediated release findings and refreshed source facts. Candidate browser evidence on disposable port 17895: inline configuration save, optional installer pending/failure/retry using a fake installer, subtitle retry after HTTP 503, queue remove/undo with real keyboard focus preservation, paused controls, volume-zero recovery, desktop fullscreen caption spacing, and narrow player layout without horizontal overflow. Synthetic local media avoids using personal viewing content. These observations do not establish native tray, Linux, clean-machine or assistive-technology behavior.

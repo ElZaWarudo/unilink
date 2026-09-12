@@ -64,9 +64,47 @@ boundaries, subtitle text, bounded speech corrections and manual timing.
 
 ## Execution and verification status
 
-Audit complete; implementation authorized by the user's full-polish request.
-Follow `../product/release-polish-plan.md`. Baseline: 89 Node tests and one Rust
-test pass; prior speech baseline has 10 passing tests. Candidate verification
-and residual gaps will be recorded here after implementation. Windows native
-interaction, clean-machine installation, Linux runtime and human usability
-measurement remain unverified; none is silently treated as a pass.
+Implementation is complete for the bounded Windows candidate. The independent
+post-remediation pass is retained in `polish-post-verification.md`; it maps all
+15 causes and sweeps all twelve Council dimensions and six Court factors.
+The source review receipt is `release-code-review.json`: eight independent
+lenses, five findings corrected and independently validated, no actionable
+findings remaining. Its source verdict is not a deployment authorization.
+
+Simplification applied three clarity corrections (speech failure messages,
+button labels and abort state) and one repeated-render optimization (clock
+updates only when the displayed second changes). A proposed new shared browser
+module for pre-existing delay formatting was declined because it would add a
+delivery route for a small unrelated duplication.
+
+Authoritative JavaScript verification passed all 116 tests and syntax checks.
+The final manifest-version correction passed the complete 22-test HTTP suite;
+an independent addendum passed the manifest test and all five setup tests.
+The unchanged Python speech suite passed all 10 tests. A real Windows process
+probe invoked the production setup runner against a disposable child and
+grandchild, cancelled it, and verified that both processes exited. This proves
+that runner's successful cancellation path on this machine; it does not prove
+native tray shutdown or kill-failure recovery.
+
+Browser checks used a disposable profile and synthetic local video: inline
+setup save, optional installer progress/failure/retry, subtitle 503 recovery,
+queue remove/undo and real focus continuity, paused controls, zero-volume
+unmute, readable timeline, fullscreen caption spacing, and a 390-pixel mobile
+viewport. The mobile media-failure case showed the full explanation and retry
+actions with client/scroll width both 375 pixels. The optional installer UI
+used a fake installer; no clean-machine installation is inferred.
+
+The actual installed English model loaded successfully with the pinned runtime
+but needed 66.28 seconds on the loaded host. Readiness verification now allows
+two minutes, remains cancellable and loads only local model files. The real
+setup status then reported ready after 86.6 seconds. Model file
+requirements were checked against the [publisher's model repository](https://huggingface.co/Systran/faster-whisper-base.en/tree/main).
+
+Native build output exhausted free disk while writing a generated debug
+archive. Cargo's own project-cache cleanup recovered space; the release build
+and Rust tests ran sequentially to avoid lock contention. The optimized native
+build, all eight release-feature library tests, MSI and NSIS generation, GUI
+subsystem check and packaged-server smoke passed. Final native/package receipts
+and hashes are in `../releases/0.2.0.md`. Windows native
+interaction, clean-machine install/upgrade/uninstall, Linux runtime, actual
+assistive technology and human usability measurement remain unverified.

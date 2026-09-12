@@ -1,0 +1,176 @@
+{
+  "status": "complete",
+  "verdict": "Ready to merge",
+  "scope": {
+    "base": "07c6ca5fe47a4c0024a092af84d45e334500564e",
+    "branch": "codex/english-subtitle-alignment",
+    "head_sha": "07c6ca5fe47a4c0024a092af84d45e334500564e",
+    "pr_url": null,
+    "files_changed": 24,
+    "mode": "local-aligned",
+    "includes_untracked": [
+      "src/speech-setup.js",
+      "test/pages.test.js",
+      "test/player-dom.test.js",
+      "test/speech-setup.test.js"
+    ]
+  },
+  "intent": "Polish the Windows release with guarded session mutations, dependable setup and playback recovery, queue continuity, optional local English speech setup, and serialized native lifecycle operations.",
+  "intent_confidence": "explicit",
+  "reviewers": [
+    "correctness",
+    "security",
+    "testing",
+    "maintainability",
+    "api-contract",
+    "reliability",
+    "julik-frontend-races",
+    "adversarial"
+  ],
+  "findings": [],
+  "actionable_findings": [],
+  "triage_groups": [],
+  "pre_existing_findings": [],
+  "requirements_completeness": {
+    "plan": "docs/product/release-polish-plan.md",
+    "source": "explicit",
+    "readiness": "legacy",
+    "requirements": [
+      {
+        "id": "1",
+        "status": "met",
+        "evidence": "Session instance/version and origin guards; asynchronous source identity checks; expired activation preserves queue."
+      },
+      {
+        "id": "2",
+        "status": "met",
+        "evidence": "Unilink handoff, stable watch URL, optional account linking, preparation polling and persisted-page recovery."
+      },
+      {
+        "id": "3",
+        "status": "met",
+        "evidence": "Paused/error controls, volume recovery, accessible seek/focus, subtitle retry/status and honest progress states."
+      },
+      {
+        "id": "4",
+        "status": "met",
+        "evidence": "Pending queue feedback, submission guards, focus preservation and session-local undo."
+      },
+      {
+        "id": "5",
+        "status": "met",
+        "evidence": "Host-only optional installation, Python prerequisite, bounded installation/readiness probes and repair path."
+      },
+      {
+        "id": "6",
+        "status": "met",
+        "evidence": "Serialized lifecycle and actionable failure phases; tested completion helpers; Windows console suppression."
+      },
+      {
+        "id": "7",
+        "status": "partially addressed",
+        "evidence": "Independent simplification/review, browser checks, final 116 JavaScript tests and syntax checks completed; atlas and packaging inputs updated. Final native execution and Windows packaging outcomes remain caller-owned pending work by explicit handoff."
+      }
+    ]
+  },
+  "learnings": [],
+  "agent_native_gaps": [],
+  "deployment_notes": [],
+  "residual_risks": [
+    "This is a source-review verdict, not release or merge authorization. Final execution and packaging evidence remains with the caller.",
+    "Native Windows tray/process-tree cleanup, clean-machine installation and Linux lifecycle remain unverified; Linux sends TERM without awaiting sidecar or descendant termination."
+  ],
+  "testing_gaps": [
+    "Actual Windows setup child/grandchild cancellation now has caller-reported terminal smoke evidence. Kill-failure recovery and native Stop/Restart/Quit during active media/setup still require isolated OS-level verification.",
+    "The DOM harness does not model layout, native media events, bubbling or all detached-node focus behavior; retain the caller's real browser acceptance evidence."
+  ],
+  "coverage": {
+    "independent_reviewers": 8,
+    "independent_validator_batches": 1,
+    "validator_selected": 5,
+    "validator_skipped": 0,
+    "validator_dropped": 5,
+    "validator_drop_reason": "All five original findings were repaired by the caller and independently verified as resolved against frozen current source.",
+    "resolved_findings": [
+      {
+        "#": 1,
+        "validated": false,
+        "reason": "Resolved: request_operation uses production Lifecycle.complete/complete_quit helpers; tests cover queued quit, cleanup success/failure, retry and stale termination. OS cleanup remains a separate smoke-test gap."
+      },
+      {
+        "#": 2,
+        "validated": false,
+        "reason": "Resolved: persisted activation pages replace with non-mutating /session; actual preparation IIFE test verifies pagehide abort and persisted-only restoration."
+      },
+      {
+        "#": 3,
+        "validated": false,
+        "reason": "Resolved: advanceMarathon catch clears overlay and restores queue controls; ended-player rejected-advance DOM regression verifies message removal and retry."
+      },
+      {
+        "#": 4,
+        "validated": false,
+        "reason": "Resolved: shared subtitleSelection status reaches API and stable player status element; pending-to-ready DOM test verifies captions and label update without reload."
+      },
+      {
+        "#": 5,
+        "validated": false,
+        "reason": "Resolved: existing setup and final readiness use bounded import/version/local-model probes; failed existing probe falls through to repair and regression tests cover missing packages."
+      }
+    ],
+    "failed_reviewers": [],
+    "validation_degraded": [],
+    "suppressed_by_confidence": {},
+    "mode_aware_demotions": 0,
+    "first_evidence_backfilled": 0,
+    "missing_quote_demotions": 0,
+    "malformed_findings": 0,
+    "malformed_returns": 0,
+    "project_standards": "Not run: successful repository search found no applicable criteria files.",
+    "cross_model": {
+      "status": "not-run",
+      "reason": "Only Codex CLI found; no installed attested-different claude, grok or cursor-agent route. No content sent externally.",
+      "fallback": "Independent in-process adversarial reviewer completed."
+    },
+    "model_tiering": "Reused distinct completed reviewer sessions; followup_task has no model selector, so models were inherited under the skill fallback.",
+    "scope_signals": {
+      "tracked_executable_lines": 1441,
+      "uncounted_files": 7,
+      "lite_eligible": false
+    },
+    "evidence": [
+      "Eight per-reviewer JSON artifacts and one independent validator receipt collected.",
+      "Independent testing reviewer ran 15 targeted tests successfully before final caller fixes.",
+      "Caller reports final preparation-page execution regression 4/4 and default SpeechSetup readiness probe exit 0.",
+      "Final 116-test JavaScript suite, 8 native tests and desktop packaging were still pending terminal evidence at explicit caller handoff."
+    ],
+    "snapshot": "final.diff, final-files.txt and final-file-hashes.json capture the reviewed frozen source; earlier findings and mechanical merge remain auditable.",
+    "addenda": [
+      {
+        "status": "complete",
+        "reviewer": "/root/release_code_review",
+        "scope": [
+          "src/server.js MANIFEST.version",
+          "test/server.test.js manifest assertion",
+          "src/speech-setup.js readiness-probe deadline"
+        ],
+        "findings": [],
+        "evidence": [
+          "MANIFEST 0.2.0 matches package.json and Tauri configuration; independently executed manifest HTTP test passed 1/1.",
+          "Only server source and its test differed from original frozen hashes before the subsequently disclosed probe deadline adjustment.",
+          "Readiness deadline increased from 10 to 120 seconds; inspected real model-load log reports 66.28 seconds. Fixed dependency versions, local_files_only and composed abort signals are preserved.",
+          "Independently executed speech setup suite passed 5/5; configuration polling retries timed-out GETs against the shared readiness promise without creating duplicate probes.",
+          "Caller reports full 116 JavaScript tests and syntax checks passed; actual Windows setup child/grandchild cancellation smoke exited 0. Smoke source inspected and asserts both PIDs terminated."
+        ],
+        "pending": [
+          "Final native tests and Windows packaging remain caller-owned.",
+          "Actual SpeechSetup.status with the 120-second bound is still awaiting caller terminal evidence."
+        ],
+        "completed_at": "2026-09-12T15:19:26Z",
+        "snapshot": "final.diff and final-file-hashes.json refreshed; original pre-addendum snapshot retained."
+      }
+    ]
+  },
+  "artifact_path": "C:/Users/Mayor/AppData/Local/Temp/compound-engineering-Mayor/ce-code-review/20260912-release-polish",
+  "run_id": "20260912-release-polish"
+}
