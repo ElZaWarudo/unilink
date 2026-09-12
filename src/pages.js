@@ -676,8 +676,8 @@ function layout(
       height: 100%;
       max-height: none;
     }
-    .player:fullscreen.is-controls-hidden,
-    .player:fullscreen.is-controls-hidden video {
+    .player.is-controls-hidden,
+    .player.is-controls-hidden video {
       cursor: none;
     }
     .marathon-panel {
@@ -876,6 +876,7 @@ function layout(
 
 export function configurationPage({
   currentUrl = "",
+  stremioToken = "",
   saved = false,
   error = "",
   manifestUrl,
@@ -910,8 +911,94 @@ export function configurationPage({
          <a class="button secondary" href="${escapeHtml(manifestUrl.replace(/^http/, "stremio"))}">Instalar addon en Stremio</a>
        </div>
      </form>
+     <section class="workbench" data-stremio-settings data-token="${escapeHtml(stremioToken)}">
+       <h2>Progreso en Stremio</h2>
+       <p>Conecta tu cuenta una vez. Después, el progreso se guarda automáticamente mientras ves contenido en Unilink.</p>
+       <p data-stremio-state role="status">Comprobando conexión…</p>
+       <div class="actions">
+         <button type="button" data-stremio-connect disabled>Conectar Stremio</button>
+         <button type="button" class="secondary" data-stremio-disconnect hidden>Desconectar</button>
+         <a data-stremio-link target="_blank" rel="noopener noreferrer" hidden>Continuar en Stremio</a>
+       </div>
+     </section>
      <p class="endpoint-note">Endpoint local · <code>${escapeHtml(manifestUrl)}</code></p>`,
-    "",
+    `(() => {
+      const root = document.querySelector('[data-stremio-settings]');
+      const state = root.querySelector('[data-stremio-state]');
+      const connect = root.querySelector('[data-stremio-connect]');
+      const disconnect = root.querySelector('[data-stremio-disconnect]');
+      const link = root.querySelector('[data-stremio-link]');
+      let timer;
+      let generation = 0;
+      async function api(action) {
+        const response = await fetch('/api/stremio/' + action, {
+          method: action === 'status' ? 'GET' : 'POST',
+          headers: { 'x-unilink-token': root.dataset.token },
+          signal: AbortSignal.timeout(15000)
+        });
+        if (!response.ok) throw new Error('connection');
+        return response.json();
+      }
+      function render(value) {
+        const connected = ['connected', 'synced', 'error'].includes(value.state);
+        connect.hidden = connected || value.state === 'pending';
+        connect.disabled = false;
+        disconnect.hidden = !connected && value.state !== 'pending';
+        disconnect.textContent = value.state === 'pending' ? 'Cancelar' : 'Desconectar';
+        if (value.state !== 'pending') link.hidden = true;
+        state.textContent = value.state === 'pending' ? 'Confirma la conexión en Stremio. Esta página se actualizará sola.' :
+          value.state === 'expired' ? 'La conexión ha caducado. Pulsa Conectar Stremio para reintentar.' :
+          value.state === 'error' ? 'No se pudo guardar el último progreso. Se reintentará al reproducir; si continúa, vuelve a conectar la cuenta.' :
+          connected ? 'Cuenta conectada. El progreso se guardará automáticamente.' : 'Cuenta sin conectar.';
+      }
+      async function poll(expected) {
+        try {
+          const value = await api('poll');
+          if (expected !== generation) return;
+          render(value);
+          if (value.state === 'pending') timer = setTimeout(() => poll(expected), 3000);
+        } catch {
+          if (expected !== generation) return;
+          state.textContent = 'No se pudo comprobar la conexión. Reintentando…';
+          timer = setTimeout(() => poll(expected), 5000);
+        }
+      }
+      connect.addEventListener('click', async () => {
+        const expected = ++generation;
+        const popup = window.open('about:blank', '_blank');
+        if (popup) popup.opener = null;
+        connect.disabled = true;
+        state.textContent = 'Preparando conexión…';
+        try {
+          const value = await api('connect');
+          if (expected !== generation) { popup?.close(); return; }
+          render(value);
+          if (value.link) {
+            link.href = value.link;
+            link.hidden = false;
+            if (popup) popup.location.replace(value.link);
+            poll(expected);
+          } else popup?.close();
+        } catch {
+          popup?.close();
+          connect.disabled = false;
+          state.textContent = 'No se pudo conectar con Stremio. Vuelve a intentarlo.';
+        }
+      });
+      disconnect.addEventListener('click', async () => {
+        generation++;
+        clearTimeout(timer);
+        disconnect.disabled = true;
+        try { render(await api('disconnect')); }
+        catch { state.textContent = 'No se pudo desconectar. Vuelve a intentarlo.'; }
+        finally { disconnect.disabled = false; }
+      });
+      api('status').then(render).catch(() => {
+        connect.disabled = false;
+        state.textContent = 'No se pudo comprobar la conexión. Puedes reintentar.';
+      });
+      window.addEventListener('pagehide', () => { generation++; clearTimeout(timer); });
+    })();`,
     "configure",
   );
 }
@@ -960,7 +1047,7 @@ export function activationPage({
     })
     .join("");
   const settingsPanel = subtitleCount
-    ? `<form method="post" action="/settings">
+    ? `<form method="post" action="/settings" data-subtitle-settings>
          <div class="fields">
            <div class="field">
              <label for="subtitleLanguage">Idioma preferido</label>
@@ -989,6 +1076,7 @@ export function activationPage({
            </div>
          </div>
          <div class="actions"><button type="submit">Aplicar subtítulos</button></div>
+         <p class="copy-status" data-subtitle-settings-status role="status" aria-live="polite"></p>
        </form>`
     : "";
   const copyScript = `const copyButton=document.querySelector("#copyWatchUrl");
@@ -999,6 +1087,8 @@ export function activationPage({
      const delayInput=document.querySelector("#subtitleDelay");
      const delayStepper=document.querySelector("[data-subtitle-delay-stepper]");
      const delayOutput=document.querySelector("[data-subtitle-delay-output]");
+     const settingsForm=document.querySelector("[data-subtitle-settings]");
+     const settingsStatus=document.querySelector("[data-subtitle-settings-status]");
      const sourceByLanguage=new Map();
      const syncSubtitleSources=()=>{
        if(!languageSelect||!sourceSelect)return;
@@ -1042,6 +1132,25 @@ export function activationPage({
        if(reset)renderDelay(0);
      });
      renderDelay(delayInput?.value);
+     settingsForm?.addEventListener("submit",async event=>{
+       event.preventDefault();
+       const submitButton=settingsForm.querySelector('[type="submit"]');
+       submitButton.disabled=true;
+       settingsStatus.textContent="Aplicando…";
+       try{
+         const response=await fetch(settingsForm.action,{
+           method:"POST",
+           headers:{accept:"application/json"},
+           body:new URLSearchParams(new FormData(settingsForm))
+         });
+         if(!response.ok)throw new Error("HTTP "+response.status);
+         settingsStatus.textContent="Subtítulos actualizados en el reproductor activo.";
+       }catch{
+         settingsStatus.textContent="No se pudieron actualizar los subtítulos.";
+       }finally{
+         submitButton.disabled=false;
+       }
+     });
      copyButton?.addEventListener("click",async()=>{
        let copied=false;
        try{
@@ -1161,9 +1270,40 @@ function marathonPanel(marathon) {
   </section>`;
 }
 
+export function subtitleSelection(active) {
+  const subtitles = active?.subtitles ?? [];
+  const preferredLanguage =
+    active?.playbackSettings?.subtitleLanguage ?? "es";
+  const preferredSubtitleId =
+    active?.playbackSettings?.subtitleId ?? "";
+  const preferredSubtitle = subtitles.findIndex(
+    (subtitle) =>
+      subtitle.language === preferredLanguage &&
+      subtitle.id === preferredSubtitleId,
+  );
+  const languageFallback = subtitles.findIndex(
+    (subtitle) => subtitle.language === preferredLanguage,
+  );
+  const index =
+    preferredSubtitle >= 0
+      ? preferredSubtitle
+      : languageFallback >= 0
+        ? languageFallback
+        : 0;
+  const subtitle = subtitles[index];
+  return {
+    index,
+    subtitle,
+    url: subtitle
+      ? `/subtitle/${index}.vtt?version=${active.version}&delay=0`
+      : "",
+  };
+}
+
 export function watchPage({
   active,
   serverInstanceId = "",
+  progressToken = "",
   marathon = null,
 }) {
   if (!active) {
@@ -1186,29 +1326,12 @@ export function watchPage({
 
   const presentation = streamPresentation(active);
   const subtitles = active.subtitles ?? [];
-  const preferredLanguage =
-    active.playbackSettings?.subtitleLanguage ?? "es";
-  const preferredSubtitleId =
-    active.playbackSettings?.subtitleId ?? "";
-  const preferredSubtitle = subtitles.findIndex(
-    (subtitle) =>
-      subtitle.language === preferredLanguage &&
-      subtitle.id === preferredSubtitleId,
-  );
-  const languageFallback = subtitles.findIndex(
-    (subtitle) => subtitle.language === preferredLanguage,
-  );
-  const selectedSubtitleIndex =
-    preferredSubtitle >= 0
-      ? preferredSubtitle
-      : languageFallback >= 0
-        ? languageFallback
-        : 0;
-  const selectedSubtitle = subtitles[selectedSubtitleIndex];
+  const {
+    index: selectedSubtitleIndex,
+    subtitle: selectedSubtitle,
+    url: subtitleUrl,
+  } = subtitleSelection(active);
   const subtitleDelay = active.playbackSettings?.subtitleDelay ?? 0;
-  const subtitleUrl = selectedSubtitle
-    ? `/subtitle/${selectedSubtitleIndex}.vtt?version=${active.version}&delay=0`
-    : "";
   const selectedSourceNumber = selectedSubtitle
     ? subtitles
         .slice(0, selectedSubtitleIndex + 1)
@@ -1234,6 +1357,7 @@ export function watchPage({
          <span>Audio compatible</span>
          <span>${subtitleStatus}</span>
          <span data-subtitle-delay-state>Sincronización ${formatSubtitleDelay(subtitleDelay)}</span>
+         <span data-stremio-progress role="status">Progreso guardado en este navegador</span>
        </div>
      </div>
      <div class="player"
@@ -1245,6 +1369,7 @@ export function watchPage({
        data-subtitle-url="${escapeHtml(subtitleUrl)}"
        data-subtitle-delay="${escapeHtml(subtitleDelay)}"
        data-resume-key="${escapeHtml(resumeKey)}"
+       data-progress-token="${escapeHtml(progressToken)}"
        tabindex="0"
        aria-label="Reproductor de ${escapeHtml(presentation.title)}">
        <video controls playsinline preload="metadata"

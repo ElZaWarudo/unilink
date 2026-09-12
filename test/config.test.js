@@ -12,6 +12,18 @@ import {
   torrentioResourceUrl,
 } from "../src/config.js";
 
+test("keeps the Stremio session across settings saves and removes it on disconnect", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "unilink-session-"));
+  const path = join(directory, "config.json");
+  const store = new ConfigStore(path);
+  await store.save({ stremioAuthKey: "test-session" });
+  await store.save({ torrentioManifestUrl: "https://example.com/manifest.json" });
+  assert.equal((await new ConfigStore(path).load()).stremioAuthKey, "test-session");
+  await store.save({ stremioAuthKey: null });
+  assert.doesNotMatch(await readFile(path, "utf8"), /test-session|stremioAuthKey/);
+  assert.equal((await store.load()).torrentioManifestUrl, "https://example.com/manifest.json");
+});
+
 test("normaliza una URL de instalación de Torrentio", () => {
   assert.equal(
     normalizeTorrentioManifestUrl(

@@ -3,6 +3,8 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { HLS_RESOURCE, proxyHls } from "./hls.js";
+import { StremioSync } from "./stremio-sync.js";
+import { handleStremioRequest, sameOriginRequest } from "./stremio-routes.js";
 
 import {
   normalizeTorrentioManifestUrl,
@@ -31,6 +33,7 @@ import {
   activationPage,
   configurationPage,
   errorPage,
+  subtitleSelection,
   watchPage,
 } from "./pages.js";
 
@@ -483,6 +486,7 @@ async function fillMarathonQueue({
 }
 
 function playerStatus(registry, serverInstanceId, watchUrl) {
+  const subtitleUrl = subtitleSelection(registry.active).url;
   return {
     active: Boolean(registry.active),
     version: registry.active?.version ?? 0,
@@ -493,6 +497,7 @@ function playerStatus(registry, serverInstanceId, watchUrl) {
       registry.active?.playbackSettings?.subtitleDelay ?? 0,
     subtitleId:
       registry.active?.playbackSettings?.subtitleId ?? "",
+    subtitleUrl,
     name:
       registry.active?.unilinkEpisode?.title ??
       registry.active?.description ??
@@ -515,9 +520,23 @@ export function createUnilinkServer({
   fetchImpl = fetch,
 }) {
   const serverInstanceId = randomUUID();
+  const adminToken = randomUUID();
+  const progressToken = randomUUID();
+  const stremioSync = new StremioSync({ configStore, fetchImpl });
 
   const server = createServer(async (request, response) => {
     applyCommonHeaders(response);
+    const url = new URL(request.url, "http://unilink.local");
+    const pathname = url.pathname;
+    if (["/watch", "/configure", "/api/progress"].includes(pathname) || pathname.startsWith("/api/stremio/")) {
+      response.removeHeader("Access-Control-Allow-Origin");
+      response.setHeader("Referrer-Policy", "no-referrer");
+      response.setHeader("X-Frame-Options", "DENY");
+      if (!sameOriginRequest(request, ["/watch", "/configure"].includes(pathname))) {
+        sendJson(response, 403, { error: "Acceso no permitido." });
+        return;
+      }
+    }
     if (!isLocalNetworkAddress(request.socket.remoteAddress)) {
       sendHtml(
         response,
@@ -532,8 +551,10 @@ export function createUnilinkServer({
       return;
     }
 
-    const url = new URL(request.url, "http://unilink.local");
     try {
+      if (await handleStremioRequest({ request, response, pathname: url.pathname,
+        sync: stremioSync, registry, serverInstanceId, adminToken, progressToken,
+        loopback: isLoopback(request.socket.remoteAddress) })) return;
       if (url.pathname === "/manifest.json" && request.method === "GET") {
         sendJson(response, 200, MANIFEST);
         return;
@@ -590,6 +611,7 @@ export function createUnilinkServer({
           200,
           configurationPage({
             currentUrl: config.torrentioManifestUrl,
+            stremioToken: adminToken,
             saved: url.searchParams.get("saved") === "1",
             manifestUrl,
           }),
@@ -618,6 +640,7 @@ export function createUnilinkServer({
             400,
             configurationPage({
               currentUrl: rawUrl,
+              stremioToken: adminToken,
               error: error.message,
               manifestUrl,
             }),
@@ -736,11 +759,19 @@ export function createUnilinkServer({
         await configStore.save({
           playbackSettings: active.playbackSettings,
         });
-        sendHtml(
-          response,
-          200,
-          activationPage({ watchUrl, active, settingsSaved: true }),
-        );
+        if (request.headers.accept?.includes("application/json")) {
+          sendJson(
+            response,
+            200,
+            playerStatus(registry, serverInstanceId, watchUrl),
+          );
+        } else {
+          sendHtml(
+            response,
+            200,
+            activationPage({ watchUrl, active, settingsSaved: true }),
+          );
+        }
         return;
       }
 
@@ -751,6 +782,7 @@ export function createUnilinkServer({
           watchPage({
             active: registry.active,
             serverInstanceId,
+            progressToken,
             marathon: registry.marathonStatus(),
           }),
         );

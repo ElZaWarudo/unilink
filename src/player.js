@@ -1,3 +1,37 @@
+export function createProgressReporter({ token, version, serverInstanceId, fetchImpl = fetch,
+  now = Date.now, onState = () => {} }) {
+  let lastAttempt = -Infinity;
+  let inFlight = 0;
+  let stopped = false;
+  async function send(progress) {
+    inFlight++;
+    lastAttempt = now();
+    try {
+      const response = await fetchImpl("/api/progress", {
+        method: "POST", headers: { "content-type": "application/json", "x-unilink-token": token },
+        body: JSON.stringify({ ...progress, version, serverInstanceId }),
+        keepalive: true, signal: AbortSignal.timeout(35000),
+      });
+      if (response.status === 409) { stopped = true; return; }
+      if (!response.ok) throw new Error("Progress request failed");
+      const result = await response.json();
+      onState(result.state);
+    } catch { onState("error"); }
+    finally {
+      inFlight--;
+    }
+  }
+  return {
+    report(time, duration, force = false) {
+      if (!token || stopped || !Number.isFinite(time) || !Number.isFinite(duration) || duration <= 0) return;
+      const progress = { time, duration };
+      if (inFlight && !force) return;
+      if (!force && now() - lastAttempt < 15000) return;
+      return send(progress);
+    },
+  };
+}
+
 function timestampSeconds(value) {
   const parts = String(value).trim().replace(",", ".").split(":");
   if (parts.length < 2 || parts.length > 3) {
@@ -186,9 +220,12 @@ export function preferredAudioTrack(tracks, preference) {
   return exact >= 0 ? exact : tracks.findIndex(track => audioLanguage(track) === audioLanguage(preference));
 }
 
-export function startAudioPlayback({ video, select, url, onError, Hls = globalThis.Hls, fetchImpl = fetch }) {
+export function startAudioPlayback({ video, select, url, onError, onRecovered = () => {}, Hls = globalThis.Hls, fetchImpl = fetch }) {
   let hls;
   let disposed = false;
+  let pendingError = null;
+  let recoveryAttempted = false;
+  let recoveryPosition = null;
   let tracks = [];
   let preference;
   try { preference = JSON.parse(localStorage.getItem("unilink:audio") || "null"); } catch { /* Playback works without storage. */ }
@@ -251,6 +288,36 @@ export function startAudioPlayback({ video, select, url, onError, Hls = globalTh
     if (time > 0) video.currentTime = time;
     if (playing) video.play().catch(() => onError("Pulsa Reproducir para continuar con la pista elegida."));
   };
+  const recover = () => {
+    if (disposed || !hls || !pendingError || recoveryAttempted) return;
+    const error = pendingError;
+    if (!["networkError", "mediaError"].includes(error.type)) return;
+    pendingError = null;
+    recoveryAttempted = true;
+    recoveryPosition = video.currentTime;
+    if (error.type === "mediaError") {
+      const wasPlaying = !video.paused;
+      hls.recoverMediaError();
+      hls.startLoad(recoveryPosition);
+      if (wasPlaying) video.play().catch(error => {
+        if (!disposed && error.name !== "AbortError") onError("Pulsa Reproducir para continuar.");
+      });
+    }
+    else if (["manifestLoadError", "manifestLoadTimeOut", "manifestParsingError"].includes(error.details)) {
+      hls.loadSource(url);
+      hls.startLoad(recoveryPosition);
+    } else hls.startLoad(recoveryPosition);
+  };
+  const recoveredProgress = () => {
+    if (recoveryPosition === null || video.paused || video.currentTime <= recoveryPosition + 1) return;
+    recoveryPosition = null;
+    recoveryAttempted = false;
+    pendingError = null;
+    render();
+    onRecovered();
+  };
+  video.addEventListener("play", recover);
+  video.addEventListener("timeupdate", recoveredProgress);
   if (Hls?.isSupported()) {
     hls = new Hls({ enableWorker: false, backBufferLength: 30, maxBufferLength: 20 });
     hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, applyPreference);
@@ -258,6 +325,12 @@ export function startAudioPlayback({ video, select, url, onError, Hls = globalTh
     hls.on(Hls.Events.ERROR, (_, data) => {
       if (data.fatal && !disposed) {
         hls.stopLoad();
+        recoveryPosition = null;
+        pendingError = data;
+        if (!video.paused && !recoveryAttempted && ["networkError", "mediaError"].includes(data.type)) {
+          recover();
+          return;
+        }
         if (select) select.disabled = true;
         onError("No se pudo reproducir con audio compatible. Comprueba que Stremio sigue abierto y actualizado, y pulsa Reintentar.");
       }
@@ -284,6 +357,10 @@ export function startAudioPlayback({ video, select, url, onError, Hls = globalTh
     onError("Este navegador no admite la reproducción con audio compatible. Usa un navegador con soporte HLS o MediaSource.");
   }
   return {
+    resume() {
+      recoveryAttempted = false;
+      recover();
+    },
     destroy() {
       if (disposed) return;
       disposed = true;
@@ -291,6 +368,8 @@ export function startAudioPlayback({ video, select, url, onError, Hls = globalTh
       hls?.destroy();
       select?.removeEventListener("change", change);
       video.removeEventListener("loadedmetadata", restoreNativePosition);
+      video.removeEventListener("play", recover);
+      video.removeEventListener("timeupdate", recoveredProgress);
     },
   };
 }
@@ -336,7 +415,7 @@ export function startPlayer(root) {
   const marathonCountdownText = marathonRoot?.querySelector(
     "[data-marathon-countdown-text]",
   );
-  const subtitleUrl = root.dataset.subtitleUrl;
+  let subtitleUrl = root.dataset.subtitleUrl;
   const expectedVersion = Number(root.dataset.version);
   const expectedServerInstanceId =
     root.dataset.serverInstanceId || "";
@@ -366,11 +445,26 @@ export function startPlayer(root) {
   let subtitleDelay = numericDelay(root.dataset.subtitleDelay);
   let captionsEnabled = Boolean(subtitleUrl);
   let captionsLoaded = false;
+  let subtitleLoadGeneration = 0;
   let animationFrame = 0;
   let lastCaption = "";
   let positionRestored = false;
+  let hasPlayed = !video.paused;
+  const progressStatus = document.querySelector("[data-stremio-progress]");
+  const progressReporter = createProgressReporter({
+    token: root.dataset.progressToken,
+    version: expectedVersion, serverInstanceId: expectedServerInstanceId,
+    onState(state) {
+      if (!progressStatus) return;
+      progressStatus.textContent = state === "synced" ? "Progreso guardado en Stremio" :
+        state === "disconnected" ? "Conecta Stremio en la configuración del PC para guardar el progreso en tu cuenta" :
+        "Progreso pendiente de guardar en Stremio. Se reintentará automáticamente.";
+    },
+  });
   let lastSavedPosition = 0;
   let controlsTimer = 0;
+  let keyboardInteraction = true;
+  let controlsPointerDown = false;
   let surfaceTapTimer = 0;
   let feedbackTimer = 0;
   let lastSurfaceTap = null;
@@ -390,7 +484,8 @@ export function startPlayer(root) {
   }
 
   function controlsHaveFocus() {
-    return controls.contains(document.activeElement);
+    return controls.contains(document.activeElement) &&
+      (keyboardInteraction || document.activeElement.tagName === "SELECT");
   }
 
   function clearControlsTimer() {
@@ -400,7 +495,7 @@ export function startPlayer(root) {
 
   function hideControls() {
     clearControlsTimer();
-    if (!isFullscreen() || controlsHaveFocus()) {
+    if (controlsPointerDown || controlsHaveFocus()) {
       return;
     }
     root.classList.add("is-controls-hidden");
@@ -409,7 +504,7 @@ export function startPlayer(root) {
 
   function scheduleControlsHide() {
     clearControlsTimer();
-    if (!isFullscreen() || controlsHaveFocus()) {
+    if (controlsPointerDown || controlsHaveFocus()) {
       return;
     }
     controlsTimer = setTimeout(hideControls, CONTROLS_HIDE_DELAY);
@@ -421,17 +516,6 @@ export function startPlayer(root) {
     root.dataset.controlsState = "visible";
     if (schedule) {
       scheduleControlsHide();
-    }
-  }
-
-  function toggleFullscreenControls() {
-    if (!isFullscreen()) {
-      return;
-    }
-    if (root.classList.contains("is-controls-hidden")) {
-      showControls();
-    } else {
-      hideControls();
     }
   }
 
@@ -717,6 +801,9 @@ export function startPlayer(root) {
   }
 
   function savePosition(force = false) {
+    if (hasPlayed && positionRestored && video.readyState >= 2 && !video.seeking) {
+      progressReporter.report(video.currentTime, video.duration, force);
+    }
     if (!resumeKey || !positionRestored) {
       return;
     }
@@ -826,7 +913,15 @@ export function startPlayer(root) {
 
   async function togglePlayback() {
     if (video.paused || video.ended) {
-      await video.play();
+      audioPlayback?.resume();
+      try {
+        await video.play();
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          setMessage("No se pudo reanudar. Pulsa Reproducir otra vez o Reintentar.");
+          if (retryButton) retryButton.hidden = false;
+        }
+      }
     } else {
       video.pause();
     }
@@ -860,37 +955,52 @@ export function startPlayer(root) {
     const now = performance.now();
     const side = surfaceSide(event.clientX);
     const isDoubleTap =
-      lastSurfaceTap?.side === side &&
+      Boolean(lastSurfaceTap) &&
+      lastSurfaceTap?.pointerType === event.pointerType &&
+      (event.pointerType !== "touch" || lastSurfaceTap?.side === side) &&
       now - lastSurfaceTap.time <= DOUBLE_TAP_DELAY;
 
     clearTimeout(surfaceTapTimer);
     if (isDoubleTap) {
       event.preventDefault();
       lastSurfaceTap = null;
-      seekBy(side === "backward" ? -SEEK_STEP : SEEK_STEP, side);
+      if (event.pointerType === "touch") {
+        seekBy(side === "backward" ? -SEEK_STEP : SEEK_STEP, side);
+      } else {
+        toggleFullscreen().catch(() => setMessage("No se pudo cambiar a pantalla completa."));
+      }
       return;
     }
 
-    lastSurfaceTap = { side, time: now };
+    lastSurfaceTap = { side, time: now, pointerType: event.pointerType };
     surfaceTapTimer = setTimeout(() => {
       lastSurfaceTap = null;
-      if (isFullscreen()) {
-        toggleFullscreenControls();
-      } else {
-        togglePlayback();
-      }
+      togglePlayback();
     }, DOUBLE_TAP_DELAY);
   }
 
-  async function loadSubtitles() {
+  async function loadSubtitles(nextUrl = subtitleUrl) {
+    const previousUrl = subtitleUrl;
+    subtitleUrl = String(nextUrl ?? "");
+    root.dataset.subtitleUrl = subtitleUrl;
+    const generation = ++subtitleLoadGeneration;
+    cues = [];
+    captionsLoaded = false;
+    renderCaption();
     if (!subtitleUrl) {
       captionsEnabled = false;
       captionsButton.disabled = true;
       captionsButton.setAttribute("aria-label", "Subtítulos no disponibles");
+      captionsButton.setAttribute("aria-pressed", "false");
       if (delayState) {
         delayState.textContent = "Sin subtítulos";
       }
       return;
+    }
+
+    if (!previousUrl) {
+      captionsEnabled = true;
+      captionsButton.setAttribute("aria-pressed", "true");
     }
 
     captionsButton.disabled = true;
@@ -900,7 +1010,11 @@ export function startPlayer(root) {
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
-      cues = parseWebVtt(await response.text());
+      const nextCues = parseWebVtt(await response.text());
+      if (generation !== subtitleLoadGeneration) {
+        return;
+      }
+      cues = nextCues;
       captionsLoaded = cues.length > 0;
       captionsButton.disabled = !captionsLoaded;
       captionsButton.title = captionsLoaded
@@ -908,7 +1022,11 @@ export function startPlayer(root) {
         : "Subtítulos no disponibles";
       root.dataset.subtitleState = captionsLoaded ? "ready" : "empty";
       renderCaption();
+      updateDelayState();
     } catch {
+      if (generation !== subtitleLoadGeneration) {
+        return;
+      }
       captionsLoaded = false;
       captionsButton.disabled = true;
       captionsButton.title = "No se pudieron cargar los subtítulos";
@@ -941,6 +1059,9 @@ export function startPlayer(root) {
           cancelMarathonCountdown();
         }
       }
+      if (String(status.subtitleUrl ?? "") !== subtitleUrl) {
+        loadSubtitles(status.subtitleUrl);
+      }
       const nextDelay = numericDelay(status.subtitleDelay);
       if (nextDelay !== subtitleDelay) {
         subtitleDelay = nextDelay;
@@ -962,22 +1083,47 @@ export function startPlayer(root) {
       event.preventDefault();
     }
   });
-  root.addEventListener("pointermove", () => {
-    if (isFullscreen()) {
+  root.addEventListener("pointermove", (event) => {
+    if (event.pointerType === "touch") return;
+    if (!keyboardInteraction && document.activeElement?.tagName === "SELECT" &&
+        controls.contains(document.activeElement) && !controls.contains(event.target)) {
+      document.activeElement.blur();
+    }
+    showControls();
+  });
+  root.addEventListener("pointerdown", () => {
+    keyboardInteraction = false;
+  }, { capture: true });
+  controls.addEventListener("change", (event) => {
+    if (!keyboardInteraction && event.target.tagName === "SELECT") {
+      event.target.blur();
       showControls();
     }
   });
   controls.addEventListener("pointerdown", () => {
+    controlsPointerDown = true;
     showControls({ schedule: false });
   });
-  controls.addEventListener("pointerup", scheduleControlsHide);
+  const finishControlsPointer = () => {
+    if (!controlsPointerDown) return;
+    controlsPointerDown = false;
+    scheduleControlsHide();
+  };
+  window.addEventListener("pointerup", finishControlsPointer);
+  window.addEventListener("pointercancel", finishControlsPointer);
+  const handleKeyboardInteraction = () => {
+    keyboardInteraction = true;
+    if (root.contains(document.activeElement)) showControls();
+  };
+  document.addEventListener("keydown", handleKeyboardInteraction, true);
   controls.addEventListener("focusin", () => {
-    showControls({ schedule: false });
+    showControls();
   });
   controls.addEventListener("focusout", () => {
     setTimeout(scheduleControlsHide);
   });
   video.addEventListener("play", () => {
+    hasPlayed = true;
     cancelMarathonCountdown();
     setMessage();
     updatePlayButton();
@@ -1049,20 +1195,14 @@ export function startPlayer(root) {
       "aria-label",
       fullscreen ? "Salir de pantalla completa" : "Pantalla completa",
     );
-    if (fullscreen) {
-      showControls();
-    } else {
-      showControls({ schedule: false });
-    }
+    showControls();
   });
 
   root.addEventListener("keydown", (event) => {
     if (["BUTTON", "INPUT", "SELECT"].includes(event.target.tagName)) {
       return;
     }
-    if (isFullscreen()) {
-      showControls();
-    }
+    showControls();
     const key = event.key.toLowerCase();
     if (key === " " || key === "k") {
       event.preventDefault();
@@ -1087,6 +1227,7 @@ export function startPlayer(root) {
   }
 
   updatePlayButton();
+  showControls();
   updateVolume();
   updateClock();
   updateDelayState();
@@ -1112,6 +1253,11 @@ export function startPlayer(root) {
       setMessage(text);
       if (retryButton) retryButton.hidden = false;
     },
+    onRecovered() {
+      playbackFailure = "";
+      setMessage();
+      if (retryButton) retryButton.hidden = true;
+    },
   }) : null;
   const retryPlayback = () => { savePosition(true); window.location.reload(); };
   retryButton?.addEventListener("click", retryPlayback);
@@ -1128,6 +1274,9 @@ export function startPlayer(root) {
       retryButton?.removeEventListener("click", retryPlayback);
       clearInterval(statusTimer);
       clearControlsTimer();
+      window.removeEventListener("pointerup", finishControlsPointer);
+      window.removeEventListener("pointercancel", finishControlsPointer);
+      document.removeEventListener("keydown", handleKeyboardInteraction, true);
       clearTimeout(surfaceTapTimer);
       clearTimeout(feedbackTimer);
       cancelMarathonCountdown();

@@ -142,7 +142,7 @@ test("la activación sustituye el stream servido por la URL fija", () => {
   assert.equal(registry.active.url, "https://example.com/two.mp4");
 });
 
-test("el delay conserva la versión y cambiar de fuente la renueva", () => {
+test("los ajustes de subtítulos conservan la versión del contenido", () => {
   const registry = new StreamRegistry({
     idFactory: () => "candidate-1",
   });
@@ -190,7 +190,7 @@ test("el delay conserva la versión y cambiar de fuente la renueva", () => {
     subtitleDelay: "30",
   });
 
-  assert.equal(registry.active.version, 2);
+  assert.equal(registry.active.version, 1);
   assert.equal(registry.active.playbackSettings.subtitleId, "es-2");
 
   registry.setPlaybackSettings({
@@ -199,7 +199,7 @@ test("el delay conserva la versión y cambiar de fuente la renueva", () => {
     subtitleDelay: "-2.5000000000000004",
   });
 
-  assert.equal(registry.active.version, 3);
+  assert.equal(registry.active.version, 1);
   assert.deepEqual(registry.active.playbackSettings, {
     subtitleLanguage: "en",
     subtitleId: "en-1",

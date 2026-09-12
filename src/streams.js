@@ -297,13 +297,6 @@ export class StreamRegistry {
       ),
     );
 
-    if (
-      nextLanguage !== currentLanguage ||
-      nextSubtitleId !== currentSubtitleId
-    ) {
-      this.version += 1;
-      this.active.version = this.version;
-    }
     this.active.playbackSettings = {
       subtitleLanguage: nextLanguage,
       subtitleId: nextSubtitleId,

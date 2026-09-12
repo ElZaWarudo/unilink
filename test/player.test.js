@@ -1,5 +1,63 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createProgressReporter } from "../src/player.js";
+
+test("reports progress periodically and flushes pause/exit even inside the throttle window", async () => {
+  const bodies = [];
+  const states = [];
+  let clock = 0;
+  const reporter = createProgressReporter({ token: "test-capability", version: 2, serverInstanceId: "instance",
+    now: () => clock, onState: state => states.push(state),
+    fetchImpl: async (_url, options) => {
+      bodies.push(JSON.parse(options.body));
+      assert.equal(options.keepalive, true);
+      return Response.json({ state: "synced" });
+    },
+  });
+  await reporter.report(120, 1800);
+  clock = 1000;
+  await reporter.report(121, 1800);
+  assert.equal(bodies.length, 1);
+  await reporter.report(122, 1800, true);
+  clock = 16000;
+  await reporter.report(137, 1800);
+  assert.deepEqual(bodies.map(body => body.time), [120, 122, 137]);
+  assert.equal(bodies[0].version, 2);
+  assert.equal(bodies[0].serverInstanceId, "instance");
+  assert.deepEqual(states, ["synced", "synced", "synced"]);
+});
+
+test("network failures retry later without disrupting playback and stale players stop reporting", async () => {
+  let attempts = 0;
+  const states = [];
+  const reporter = createProgressReporter({ token: "test-capability", onState: state => states.push(state),
+    fetchImpl: async () => {
+      attempts++;
+      if (attempts === 1) throw new Error("offline");
+      return new Response(null, { status: 409 });
+    },
+  });
+  await reporter.report(120, 1800, true);
+  await reporter.report(125, 1800, true);
+  await reporter.report(130, 1800, true);
+  assert.deepEqual(states, ["error"]);
+  assert.equal(attempts, 2);
+});
+
+test("exit sends a keepalive request immediately even while another report is waiting", async () => {
+  let finish;
+  const times = [];
+  const reporter = createProgressReporter({ token: "test-capability", fetchImpl: async (_url, options) => {
+    times.push(JSON.parse(options.body).time);
+    if (times.length === 1) await new Promise(resolve => { finish = resolve; });
+    return Response.json({ state: "pending" });
+  } });
+  const first = reporter.report(120, 1800);
+  await reporter.report(125, 1800, true);
+  assert.deepEqual(times, [120, 125]);
+  finish();
+  await first;
+});
 
 import {
   adjustSubtitleDelay,
@@ -67,6 +125,64 @@ test("cambia el audio sin reiniciar el vídeo y libera HLS al salir", (t) => {
   assert.equal(select.disabled, true);
   player.destroy();
   assert.equal(instance.destroyed, true);
+});
+
+test("reanuda la carga HLS tras un fallo durante la pausa sin perder posición", () => {
+  let instance;
+  class FakeHls {
+    static isSupported = () => true;
+    static Events = { AUDIO_TRACKS_UPDATED: "tracks", AUDIO_TRACK_SWITCHED: "switched", ERROR: "error" };
+    constructor() { instance = this; this.callbacks = {}; }
+    on(event, fn) { this.callbacks[event] = fn; }
+    loadSource() {}
+    attachMedia() {}
+    stopLoad() {}
+    startLoad(position) { this.startPosition = position; this.starts = (this.starts || 0) + 1; }
+    recoverMediaError() { this.recovered = true; video.paused = true; }
+    destroy() {}
+  }
+  const video = Object.assign(new EventTarget(), {
+    currentTime: 120, paused: true,
+    play: async () => { video.paused = false; },
+  });
+  let failures = 0;
+  let recoveries = 0;
+  const playback = startAudioPlayback({ video, url: "/master.m3u8", Hls: FakeHls,
+    onError() { failures++; }, onRecovered() { recoveries++; },
+  });
+  instance.callbacks.error(null, { fatal: true, type: "networkError", details: "fragLoadError" });
+  assert.equal(instance.startPosition, undefined, "no reanudar mientras está pausado");
+  video.paused = false;
+  video.dispatchEvent(new Event("play"));
+  assert.equal(instance.startPosition, 120);
+  assert.equal(video.currentTime, 120);
+  instance.callbacks.error(null, { fatal: true, type: "networkError" });
+  assert.equal(instance.starts, 1, "no bucle de reintentos cuando la fuente sigue fallando");
+  assert.equal(failures, 2);
+  video.currentTime = 122;
+  video.dispatchEvent(new Event("timeupdate"));
+  assert.equal(recoveries, 0, "el búfer antiguo no borra un segundo error fatal");
+  playback.resume();
+  assert.equal(instance.starts, 2, "otra acción explícita puede reintentar");
+  video.currentTime = 125;
+  video.dispatchEvent(new Event("timeupdate"));
+  assert.equal(recoveries, 1);
+  video.paused = true;
+  instance.callbacks.error(null, { fatal: true, type: "mediaError" });
+  playback.resume();
+  assert.equal(instance.recovered, true, "repara MediaSource antes de solicitar play");
+  assert.equal(instance.startPosition, 125);
+  assert.equal(video.paused, true, "recuperar una pausa no reproduce por sí solo");
+  video.paused = false;
+  video.currentTime = 128;
+  video.dispatchEvent(new Event("timeupdate"));
+  instance.callbacks.error(null, { fatal: true, type: "mediaError" });
+  assert.equal(video.paused, false, "una reconexión automática conserva la intención de reproducir");
+  playback.destroy();
+  const starts = instance.starts;
+  video.dispatchEvent(new Event("play"));
+  playback.resume();
+  assert.equal(instance.starts, starts);
 });
 
 test("selecciona audio nativo sin AudioTrack API y restaura posición y reproducción", async (t) => {

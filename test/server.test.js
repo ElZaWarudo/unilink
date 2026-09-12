@@ -3,6 +3,8 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { request as httpRequest } from "node:http";
+import { runInNewContext } from "node:vm";
 
 import { ConfigStore } from "../src/config.js";
 import { createUnilinkServer } from "../src/server.js";
@@ -38,6 +40,71 @@ async function fixture(options = {}) {
     close: () => new Promise((resolve) => server.close(resolve)),
   };
 }
+
+test("browser progress updates Stremio and rejects stale players and cross-origin account access", async (t) => {
+  const writes = [];
+  const app = await fixture({ fetchImpl: async (url, options) => {
+    if (url.endsWith("datastoreGet")) return Response.json({ result: [{ _id: "tt123", name: "Movie", type: "movie", state: {} }] });
+    if (url.endsWith("datastorePut")) {
+      writes.push(JSON.parse(options.body));
+      return Response.json({ result: { success: true } });
+    }
+    throw new Error("Unexpected upstream");
+  } });
+  t.after(app.close);
+  await app.configStore.save({ stremioAuthKey: "test-private-session" });
+  app.registry.activate(app.registry.addCandidate({ url: "https://example.com/movie.mkv", unilinkContent: { type: "movie", id: "tt123" } }));
+  const page = await fetch(`${app.baseUrl}/watch`);
+  assert.equal(page.headers.get("access-control-allow-origin"), null);
+  const html = await page.text();
+  assert.doesNotMatch(html, /test-private-session/);
+  const token = html.match(/data-progress-token="([^"]+)"/)[1];
+  const serverInstanceId = html.match(/data-server-instance-id="([^"]+)"/)[1];
+  const body = { serverInstanceId, version: app.registry.active.version, time: 300, duration: 1800 };
+  const send = (headers = {}) => fetch(`${app.baseUrl}/api/progress`, {
+    method: "POST", headers: { "x-unilink-token": token, ...headers }, body: JSON.stringify(body),
+  });
+  assert.deepEqual(await (await send()).json(), { state: "synced" });
+  assert.equal(writes[0].changes[0].state.timeOffset, 300000);
+  assert.equal((await send({ origin: "https://evil.example" })).status, 403);
+  assert.equal((await send({ "x-unilink-token": "invalid" })).status, 403);
+  const rebindingStatus = await new Promise((resolve, reject) => {
+    httpRequest(`${app.baseUrl}/configure`, { headers: { host: "10.evil.example" } }, response => {
+      response.resume();
+      resolve(response.statusCode);
+    }).on("error", reject).end();
+  });
+  assert.equal(rebindingStatus, 403);
+  const navigationStatus = await new Promise((resolve, reject) => {
+    httpRequest(`${app.baseUrl}/watch`, { headers: {
+      "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document",
+    } }, response => { response.resume(); resolve(response.statusCode); }).on("error", reject).end();
+  });
+  assert.equal(navigationStatus, 200);
+  const configuration = await fetch(`${app.baseUrl}/configure`);
+  assert.equal(configuration.headers.get("access-control-allow-origin"), null);
+  assert.doesNotMatch(await configuration.text(), /test-private-session/);
+  app.registry.activate(app.registry.addCandidate({ url: "https://example.com/next.mkv" }));
+  assert.equal((await send()).status, 409);
+  assert.equal(writes.length, 1);
+});
+
+test("Stremio connection routes persist the link without exposing the session and disconnect cleanly", async (t) => {
+  const app = await fixture({ fetchImpl: async url => Response.json({ result: url.includes("/create")
+    ? { code: "test-code", link: "https://link.stremio.com/TEST" }
+    : { authKey: "test-private-session" } }) });
+  t.after(app.close);
+  const html = await fetch(`${app.baseUrl}/configure`).then(r => r.text());
+  const token = html.match(/data-stremio-settings data-token="([^"]+)"/)[1];
+  const post = action => fetch(`${app.baseUrl}/api/stremio/${action}`, { method: "POST", headers: { "x-unilink-token": token } });
+  assert.equal((await fetch(`${app.baseUrl}/api/stremio/connect`, { method: "POST" })).status, 403);
+  assert.equal((await (await post("connect")).json()).state, "pending");
+  assert.deepEqual(await (await post("poll")).json(), { state: "connected" });
+  assert.equal((await app.configStore.load()).stremioAuthKey, "test-private-session");
+  assert.deepEqual(await fetch(`${app.baseUrl}/api/stremio/status`).then(r => r.json()), { state: "connected" });
+  await post("disconnect");
+  assert.equal((await app.configStore.load()).stremioAuthKey, undefined);
+});
 
 test("sirve HLS con audio AAC y oculta las URLs internas en todas las listas", async (t) => {
   const registry = new StreamRegistry();
@@ -303,13 +370,51 @@ test("carga automáticamente subtítulos de Stremio para el torrent activo", asy
   assert.match(activationHtml, /Fuente 2 · Español/);
   assert.match(activationHtml, /name="subtitleDelay"/);
   assert.match(activationHtml, /id="copyWatchUrl"/);
+  assert.match(activationHtml, /data-subtitle-settings/);
+  assert.match(activationHtml, /event\.preventDefault\(\)/);
+  assert.match(activationHtml, /accept:\s*"application\/json"/);
 
-  const settings = await fetch(`${app.baseUrl}/settings`, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: "subtitleLanguage=es&subtitleId=subtitle-es-2&subtitleDelay=1.5",
+  let submit;
+  let settings;
+  const submitButton = {};
+  const settingsMessage = {};
+  const form = {
+    action: `${app.baseUrl}/settings`,
+    querySelector: () => submitButton,
+    addEventListener: (_event, callback) => { submit = callback; },
+  };
+  runInNewContext(activationHtml.match(/<script>([\s\S]*?)<\/script>/)[1], {
+    document: { querySelector: selector =>
+      selector === "[data-subtitle-settings]" ? form :
+        selector === "[data-subtitle-settings-status]" ? settingsMessage : null },
+    URLSearchParams,
+    FormData: class {
+      constructor() {
+        const fields = new FormData();
+        fields.set("subtitleLanguage", "es");
+        fields.set("subtitleId", "subtitle-es-2");
+        fields.set("subtitleDelay", "1.5");
+        return fields;
+      }
+    },
+    fetch: async (url, options) => {
+      settings = await fetch(url, options);
+      return settings;
+    },
   });
+  let prevented = false;
+  await submit({ preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(submitButton.disabled, false);
   assert.equal(settings.status, 200);
+  assert.match(settings.headers.get("content-type"), /application\/json/);
+  const settingsStatus = await settings.json();
+  assert.equal(settingsStatus.subtitleDelay, 1.5);
+  assert.equal(settingsStatus.version, 1);
+  assert.equal(
+    settingsStatus.subtitleUrl,
+    "/subtitle/1.vtt?version=1&delay=0",
+  );
 
   const delayOnlySettings = await fetch(`${app.baseUrl}/settings`, {
     method: "POST",
@@ -321,7 +426,7 @@ test("carga automáticamente subtítulos de Stremio para el torrent activo", asy
   const status = await fetch(`${app.baseUrl}/api/status`).then(
     (response) => response.json(),
   );
-  assert.equal(status.version, 2);
+  assert.equal(status.version, 1);
   assert.equal(status.subtitleDelay, 2.5);
   assert.equal(status.subtitleId, "subtitle-es-2");
   assert.deepEqual((await app.configStore.load()).playbackSettings, {
@@ -340,7 +445,7 @@ test("carga automáticamente subtítulos de Stremio para el torrent activo", asy
   assert.doesNotMatch(html, /<track kind="subtitles"/);
   assert.match(
     html,
-    /data-subtitle-url="\/subtitle\/1\.vtt\?version=2&amp;delay=0"/,
+    /data-subtitle-url="\/subtitle\/1\.vtt\?version=1&amp;delay=0"/,
   );
   assert.doesNotMatch(html, /src="\/subtitle\/0\.vtt/);
   assert.match(html, /data-unilink-player/);

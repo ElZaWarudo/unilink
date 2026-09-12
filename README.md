@@ -23,6 +23,7 @@ need Node.js or a terminal.
 - Automatic subtitle discovery through OpenSubtitles v3.
 - Subtitle language, source, and timing preferences persisted between sessions.
 - Resume position and touch-friendly playback controls.
+- Optional one-time Stremio account connection with automatic playback-position sync.
 - HTTP Range proxying for seeking.
 - Automatic next-episode queue for standard Stremio IMDb episode IDs.
 - Source ranking based on resolution, release, video, and audio similarity.
@@ -110,6 +111,29 @@ For standard Stremio episode IDs in the form
 
 Missing metadata or sources do not interrupt the current episode. The queue
 shows which item could not be prepared.
+
+### Save progress in Stremio
+
+On the PC, open **Configure** from the tray and click **Conectar Stremio**.
+Approve the connection on Stremio's website; Unilink detects it automatically.
+You only need to do this once. Use **Desconectar** to remove Unilink's saved connection.
+
+While watching, Unilink sends the current movie or episode position to your
+Stremio account every 15 seconds and on pause or exit. The player shows whether
+the position was saved or is waiting to retry. Playback and browser-local resume
+continue working if Stremio is unavailable. Closing the browser while offline
+can leave Stremio at the last successfully saved position.
+
+This synchronizes playback position from Unilink to Stremio. It preserves existing
+watched markers; it does not mark completed episodes watched or import account
+resume positions into a different browser. Stremio may need to refresh its library
+before displaying an external update.
+
+The account session key stays in the PC's Unilink configuration file and is never
+sent to playback devices. Treat that file as private. Linux creates it with
+owner-only permissions; Windows uses the data directory's inherited permissions.
+Connecting and disconnecting are available only from the PC. You may need to
+connect again if Stremio revokes the session.
 
 ## Configuration
 

@@ -100,6 +100,9 @@ export class ConfigStore {
       const content = await readFile(this.path, "utf8");
       const parsed = JSON.parse(content);
       const config = {};
+      if (typeof parsed.stremioAuthKey === "string" && parsed.stremioAuthKey.length <= 4096) {
+        config.stremioAuthKey = parsed.stremioAuthKey;
+      }
       if (parsed.torrentioManifestUrl) {
         config.torrentioManifestUrl = normalizeTorrentioManifestUrl(
           parsed.torrentioManifestUrl,
@@ -141,6 +144,9 @@ export class ConfigStore {
     const current = await this.load();
     const merged = { ...current, ...config };
     const normalized = {};
+    if (typeof merged.stremioAuthKey === "string" && merged.stremioAuthKey.length <= 4096) {
+      normalized.stremioAuthKey = merged.stremioAuthKey;
+    }
     if (merged.torrentioManifestUrl) {
       normalized.torrentioManifestUrl = normalizeTorrentioManifestUrl(
         merged.torrentioManifestUrl,
@@ -162,7 +168,7 @@ export class ConfigStore {
     await writeFile(
       temporaryPath,
       `${JSON.stringify(normalized, null, 2)}\n`,
-      "utf8",
+      { encoding: "utf8", mode: 0o600 },
     );
     await rename(temporaryPath, this.path);
     return normalized;
