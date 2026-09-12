@@ -32,6 +32,63 @@ export function createProgressReporter({ token, version, serverInstanceId, fetch
   };
 }
 
+export function createSubtitleSyncReporter({ token, getSnapshot, fetchImpl = fetch,
+  setTimer = setTimeout, clearTimer = clearTimeout }) {
+  const clientId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  let sequence = 0, timer = null, inFlight = false, pending = null, stopped = false, rejectedContext = null;
+  let observedContext = null, generation = 0;
+  const contextKey = value => JSON.stringify([value.serverInstanceId, value.version, value.subtitleUrl]);
+  const observe = value => {
+    const key = contextKey(value);
+    if (key !== observedContext) { observedContext = key; generation++; rejectedContext = null; }
+    return { value, epoch: generation };
+  };
+  const heartbeat = () => {
+    if (stopped || !token || timer !== null) return;
+    timer = setTimer(() => { timer = null; reporter.report(); heartbeat(); }, 3000);
+  };
+  async function send({ value, epoch }) {
+    inFlight = true;
+    let delivered = false;
+    try {
+      const response = await fetchImpl("/api/subtitle-sync/playback", {
+        method: "POST", headers: { "content-type": "application/json", "x-unilink-token": token },
+        body: JSON.stringify({ ...value, clientId, sequence: ++sequence }),
+        keepalive: true, signal: AbortSignal.timeout(10000),
+      });
+      delivered = response.ok;
+      if (response.status === 409 && epoch === generation) rejectedContext = contextKey(value);
+    } catch { /* The next heartbeat retries a failed delivery. */ }
+    finally {
+      inFlight = false;
+      const next = pending; pending = null;
+      if (next && (delivered || stopped || next.epoch !== epoch)) send(next);
+    }
+  }
+  const reporter = {
+    report() {
+      if (!token || stopped) return;
+      heartbeat();
+      const value = { ...getSnapshot() };
+      const report = observe(value);
+      if (!value.subtitleUrl || contextKey(value) === rejectedContext) return;
+      if (inFlight) pending = report;
+      else send(report);
+    },
+    destroy() {
+      if (stopped) return;
+      stopped = true; clearTimer(timer); timer = null;
+      if (!token) return;
+      const value = { ...getSnapshot(), enabled: false, state: "off", automaticOffset: 0, manualBaseline: 0 };
+      const report = observe(value);
+      if (!value.subtitleUrl || contextKey(value) === rejectedContext) return;
+      if (inFlight) pending = report;
+      else send(report);
+    },
+  };
+  return reporter;
+}
+
 function timestampSeconds(value) {
   const parts = String(value).trim().replace(",", ".").split(":");
   if (parts.length < 2 || parts.length > 3) {
@@ -478,13 +535,23 @@ export function alignedSubtitleCues(cues, corrections) {
   return shifted;
 }
 
-  export function createSubtitleSyncController({ token, fetchImpl = fetch, onChange = () => {},
-    setTimer = setTimeout, clearTimer = clearTimeout, now = Date.now }) {
-    const clientId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  let context = {}, enabled = false, disposed = false, generation = 0;
+export function appliedSubtitleOffset(cues, shifted, corrections, time, manualAdjustment = 0) {
+  const active = cueAtTime(shifted, time, manualAdjustment);
+  if (active) {
+    const index = shifted.indexOf(active);
+    return shifted[index].start - cues[index].start;
+  }
+  const position = time - manualAdjustment;
+  return corrections.findLast(item => position >= item.start + item.offset && position < item.end + item.offset)?.offset || 0;
+}
+
+export function createSubtitleSyncController({ token, fetchImpl = fetch, onChange = () => {},
+  setTimer = setTimeout, clearTimer = clearTimeout }) {
+  const clientId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  let context = {}, enabled = false, disposed = false, contextStale = false, generation = 0;
   let jobId = null, timer = null, busy = false, corrections = [], state = "off";
   let stage = null, elapsedMs = 0;
-  let attempted = new Map(), retryAfter = 0, position = 0, duration = 0, pendingBucket = null;
+  let attempted = new Map(), failures = 0, requestSequence = 0, position = 0, duration = 0, pendingBucket = null;
   const headers = { "content-type": "application/json", "x-unilink-token": token };
   const eligible = () => context.captions && isEnglishLanguage(context.subtitleLanguage) &&
     Number.isInteger(context.audioIndex) && context.audioIndex >= 0 &&
@@ -511,6 +578,30 @@ export function alignedSubtitleCues(cues, corrections) {
       throw new Error("Subtitle synchronization failed");
     return payload;
   }
+  const retry = (next, epoch) => {
+    if (pendingBucket !== null) attempted.delete(pendingBucket);
+    pendingBucket = null;
+    cancelJob(jobId); jobId = null;
+    emit(next);
+    const delay = Math.min(30000, (next === "busy" ? 10000 : 2000) * 2 ** Math.min(failures++, 4));
+    timer = setTimer(() => {
+      if (epoch !== generation || disposed || !enabled) return;
+      timer = null;
+      checkCapability(epoch);
+    }, delay);
+  };
+  async function checkCapability(epoch) {
+    busy = true;
+    try {
+      const capability = await request("/api/subtitle-sync");
+      if (epoch !== generation || disposed || !enabled) return;
+      if (capability.state === "stale") { contextStale = true; emit("stale"); return; }
+      if (!capability.available) { retry("unavailable", epoch); return; }
+      busy = false; emit("waiting"); controller.tick(position, duration);
+    } catch {
+      if (epoch === generation && !disposed && enabled) retry("error", epoch);
+    } finally { if (epoch === generation && state !== "working") busy = false; }
+  }
   async function run(time, bucket, epoch, poll = false) {
     pendingBucket = bucket;
     busy = true;
@@ -518,54 +609,51 @@ export function alignedSubtitleCues(cues, corrections) {
       const result = await request(poll ? `/api/subtitle-sync?job=${encodeURIComponent(jobId)}` : "/api/subtitle-sync", poll ? {} : {
         method: "POST", body: JSON.stringify({ serverInstanceId: context.serverInstanceId, version: context.version,
             subtitleUrl: context.subtitleUrl, audioIndex: context.audioIndex, time, duration,
-            requestId: `${clientId}:${epoch}:${bucket}` }),
+            requestId: `${clientId}:${epoch}:${bucket}:${++requestSequence}` }),
       });
       if (epoch !== generation || disposed || !enabled) {
         if (result.state === "working") cancelJob(result.jobId);
         return;
       }
-      jobId = result.jobId || null;
-        if (result.state === "working") {
-          if (state !== "working" || stage !== (result.stage || null) || elapsedMs !== (result.elapsedMs || 0)) emit("working", result);
-        timer = setTimer(() => { timer = null; run(time, bucket, epoch, true); }, 1000);
+      if (result.state === "working" && result.jobId) {
+        jobId = result.jobId;
+        if (state !== "working" || stage !== (result.stage || null) || elapsedMs !== (result.elapsedMs || 0)) emit("working", result);
+        timer = setTimer(() => {
+          if (epoch !== generation || disposed || !enabled) return;
+          timer = null; run(time, bucket, epoch, true);
+        }, 1000);
       } else {
-        attempted.set(bucket, result.state);
-        pendingBucket = null;
-        jobId = null;
         if (result.state === "ready" && result.result &&
             [result.result.start, result.result.end, result.result.offset].every(Number.isFinite) &&
-            result.result.end > result.result.start) {
+            result.result.end > result.result.start && Math.abs(result.result.offset) <= 120) {
+          attempted.set(bucket, "ready"); pendingBucket = null; jobId = null; failures = 0;
           corrections = [...corrections, result.result].slice(-32);
           emit("ready");
-        } else if (result.state === "busy") {
-          attempted.delete(bucket); retryAfter = now() + 10000; emit("busy");
-        } else emit(["insufficient", "unavailable", "stale"].includes(result.state) ? result.state : "error");
+        } else if (["insufficient", "stale"].includes(result.state)) {
+          attempted.set(bucket, result.state); pendingBucket = null; jobId = null; failures = 0;
+          if (result.state === "stale") contextStale = true;
+          emit(result.state);
+        } else retry(["busy", "unavailable"].includes(result.state) ? result.state : "error", epoch);
       }
     } catch {
-      if (epoch === generation && !disposed && enabled) { pendingBucket = null; cancelJob(jobId); jobId = null; emit("error"); }
+      if (epoch === generation && !disposed && enabled) retry("error", epoch);
     } finally { if (epoch === generation) busy = false; }
   }
   const controller = {
     setContext(next) {
       if (JSON.stringify(next) === JSON.stringify(context)) return;
-      cancel(); context = { ...next }; corrections = []; attempted = new Map(); enabled = false; emit("off");
+      cancel(); context = { ...next }; corrections = []; attempted = new Map(); failures = 0; contextStale = false; enabled = false; emit("off");
     },
     async setEnabled(value) {
-      cancel(); corrections = []; attempted = new Map(); retryAfter = 0;
-      enabled = Boolean(value && eligible() && !disposed);
-      if (!enabled) { emit("off"); return; }
-      const epoch = generation; busy = true; emit("working");
-      try {
-        const capability = await request("/api/subtitle-sync");
-        if (epoch !== generation || disposed || !enabled) return;
-        busy = false;
-        if (!capability.available) { emit("unavailable"); return; }
-        emit("waiting"); controller.tick(position, duration);
-      } catch { if (epoch === generation && !disposed) { busy = false; emit("error"); } }
+      cancel(); corrections = []; attempted = new Map(); failures = 0;
+      enabled = Boolean(value && eligible() && !disposed && !contextStale);
+      if (!enabled) { emit(value && contextStale ? "stale" : "off"); return; }
+      emit("working");
+      await checkCapability(generation);
     },
     tick(time, total) {
       position = Number(time); duration = Number(total);
-      if (!enabled || disposed || busy || timer || !eligible() || now() < retryAfter ||
+      if (!enabled || disposed || busy || timer || !eligible() ||
           ["error", "unavailable", "stale"].includes(state) || !Number.isFinite(position) ||
           !Number.isFinite(duration) || duration <= 0) return;
       const coverage = corrections.findLast(item => position >= item.start + item.offset && position < item.end + item.offset);
@@ -580,11 +668,13 @@ export function alignedSubtitleCues(cues, corrections) {
         if (state !== settled) emit(settled);
         return;
       }
-        while (attempted.size >= 32) attempted.delete(attempted.keys().next().value);
-        attempted.set(bucket, "working"); emit("working"); run(target, bucket, generation);
+      while (attempted.size >= 32) attempted.delete(attempted.keys().next().value);
+      attempted.set(bucket, "working"); emit("working"); run(target, bucket, generation);
     },
     seek(time, total) {
       cancel();
+      position = Number(time); duration = Number(total);
+      if (enabled && ["error", "unavailable", "busy"].includes(state)) { checkCapability(generation); return; }
       if (enabled && state === "working") emit("waiting");
       controller.tick(time, total);
     },
@@ -714,15 +804,27 @@ export function startPlayer(root) {
   let lastPositiveVolume = video.volume > 0 ? video.volume : 1;
   let actualAudio = { index: null, language: "" };
   let syncedCues = [], syncEnabled = false, syncManualBaseline = 0;
+  let syncState = "off", syncCorrections = [];
+  const syncReporter = createSubtitleSyncReporter({ token: root.dataset.progressToken,
+    getSnapshot() {
+      return { serverInstanceId: expectedServerInstanceId, version: expectedVersion, subtitleUrl,
+        enabled: syncEnabled, state: syncState,
+        automaticOffset: syncEnabled ? appliedSubtitleOffset(cues, syncedCues, syncCorrections,
+          video.currentTime, playbackSubtitleDelay()) : 0,
+        manualBaseline: syncEnabled ? syncManualBaseline : 0,
+        time: Number.isFinite(video.currentTime) ? video.currentTime : 0 };
+    } });
   const subtitleSync = createSubtitleSyncController({
     token: root.dataset.progressToken,
     onChange({ state, stage, elapsedMs, enabled, eligible, corrections }) {
       if (enabled && !syncEnabled) syncManualBaseline = subtitleDelay;
       syncEnabled = enabled;
+      syncState = state; syncCorrections = corrections;
       updateDelayState();
       syncedCues = enabled ? alignedSubtitleCues(cues, corrections) : cues;
       if (syncButton) {
         syncButton.disabled = !eligible;
+        syncButton.textContent = "Auto-sync";
         syncButton.setAttribute("aria-pressed", String(enabled));
       }
       if (syncStatus) {
@@ -734,9 +836,9 @@ export function startPlayer(root) {
           off: eligible ? "" : "Requiere subtítulos y audio en inglés",
           waiting: "Esperando diálogo…", working: "Sincronizando este tramo… Puede tardar hasta 3 minutos",
           ready: "Tramo sincronizado", insufficient: "Sin coincidencia fiable; se conserva el tiempo original",
-          busy: "Motor ocupado; se reintentará", unavailable: "Usa «Configurar en el PC» para instalar el motor en el PC que ejecuta Unilink",
-          error: "No se pudo sincronizar. Desactiva y activa para reintentar",
-          stale: "La fuente ha cambiado. Desactiva y activa para reintentar",
+          busy: "Motor ocupado; reintentando…", unavailable: "Motor no disponible; reintentando…",
+          error: "No se pudo sincronizar; reintentando…",
+          stale: "La fuente ha cambiado; abre la reproducción actual",
         };
         const stages = { preparing: "Preparando subtítulos", extracting: "Extrayendo audio",
           loading_model: "Cargando motor de voz", queued: "Esperando al motor",
@@ -746,6 +848,7 @@ export function startPlayer(root) {
         if (syncStatus.textContent !== text) syncStatus.textContent = text;
       }
       renderCaption();
+      syncReporter.report();
     },
   });
   function updateSyncContext() {
@@ -1444,6 +1547,7 @@ export function startPlayer(root) {
         })
       ) {
         subtitleSync.destroy();
+        syncReporter.destroy();
         location.reload();
         return;
       }
@@ -1699,7 +1803,7 @@ export function startPlayer(root) {
     for (const controller of mutationControllers) controller.abort();
     clearInterval(statusTimer);
   }
-  const saveOnExit = () => { savePosition(true); stopRequests(); subtitleSync.destroy(); audioPlayback?.destroy(); };
+  const saveOnExit = () => { savePosition(true); stopRequests(); subtitleSync.destroy(); syncReporter.destroy(); audioPlayback?.destroy(); };
   window.addEventListener("pagehide", saveOnExit);
   const restoreAfterCache = (event) => { if (event.persisted) window.location.reload(); };
   window.addEventListener("pageshow", restoreAfterCache);
@@ -1708,6 +1812,7 @@ export function startPlayer(root) {
     destroy() {
       stopRequests();
       subtitleSync.destroy();
+      syncReporter.destroy();
       syncButton?.removeEventListener("click", toggleSync);
       video.removeEventListener("seeking", syncSeek);
       audioPlayback?.destroy();

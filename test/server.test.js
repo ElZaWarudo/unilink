@@ -41,6 +41,58 @@ async function fixture(options = {}) {
   };
 }
 
+test("player timing reaches PC status securely without changing saved caption settings", async t => {
+  const app = await fixture();
+  t.after(app.close);
+  app.registry.activate(app.registry.addCandidate({ url: "https://example.com/movie.mp4" }));
+  app.registry.setSubtitles([{ id: "en-1", language: "en", label: "English", url: "https://example.com/en.srt" },
+    { id: "en-2", language: "en", label: "English", url: "https://example.com/en2.srt" }]);
+  app.registry.setPlaybackSettings({ subtitleLanguage: "en", subtitleId: "en-1", subtitleDelay: -2 });
+  const html = await (await fetch(`${app.baseUrl}/watch`)).text();
+  const token = html.match(/data-progress-token="([^"]+)"/)[1];
+  const status = () => fetch(`${app.baseUrl}/api/status`).then(r => r.json());
+  const initial = await status();
+  const body = { serverInstanceId: initial.serverInstanceId, version: initial.version,
+    subtitleUrl: initial.subtitleUrl, clientId: "tv", sequence: 1, enabled: true, state: "ready",
+    automaticOffset: 1.458, manualBaseline: -2, time: 100 };
+  const send = (change = {}, headers = {}) => fetch(`${app.baseUrl}/api/subtitle-sync/playback`, {
+    method: "POST", headers: { "x-unilink-token": token, "content-type": "application/json", ...headers },
+    body: JSON.stringify({ ...body, ...change }),
+  });
+  assert.equal(initial.subtitleSync, null);
+  assert.equal((await send({}, { "x-unilink-token": "invalid" })).status, 403);
+  assert.equal((await send({}, { origin: "https://evil.example" })).status, 403);
+  assert.equal((await send({ automaticOffset: "1.458" })).status, 400);
+  assert.equal((await send({ automaticOffset: 121 })).status, 400);
+  assert.equal((await send({ sequence: -1 })).status, 400);
+  assert.equal((await send({ enabled: "true" })).status, 400);
+  assert.equal((await send({ state: "made-up" })).status, 400);
+  assert.equal((await send({ subtitleUrl: "/old.vtt" })).status, 409);
+  assert.equal((await send({ extra: "a".repeat(3000) })).status, 413);
+  const response = await send();
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("access-control-allow-origin"), null);
+  assert.equal((await status()).subtitleSync.effectiveDelay, 1.458);
+  assert.equal((await status()).subtitleDelay, -2);
+  await send({ automaticOffset: 25 }); // duplicate sequence cannot overwrite a report
+  assert.equal((await status()).subtitleSync.automaticOffset, 1.458);
+  const settingsResponse = await fetch(`${app.baseUrl}/settings`, { method: "POST",
+    headers: { accept: "application/json" }, body: new URLSearchParams({
+      serverInstanceId: initial.serverInstanceId, version: String(initial.version),
+      subtitleLanguage: "en", subtitleId: "en-1", subtitleDelay: "-1.95",
+    }) });
+  const settings = await settingsResponse.json();
+  assert.ok(Math.abs(settings.subtitleSync.effectiveDelay - 1.508) < 1e-9);
+  assert.equal((await app.configStore.load()).playbackSettings.subtitleDelay, -1.95);
+  await send({ sequence: 2, enabled: false, state: "off" });
+  assert.equal((await status()).subtitleSync.effectiveDelay, -1.95);
+  app.registry.setPlaybackSettings({ subtitleLanguage: "en", subtitleId: "en-2", subtitleDelay: -1.95 });
+  assert.equal((await status()).subtitleSync, null);
+  assert.equal((await send({ sequence: 3 })).status, 409);
+  app.registry.activate(app.registry.addCandidate({ url: "https://example.com/next.mp4" }));
+  assert.equal((await send({ sequence: 4 })).status, 409);
+});
+
 test("speech installation requires the host configuration token and same origin", async (t) => {
   let starts = 0;
   let closes = 0;
@@ -515,11 +567,20 @@ test("carga automáticamente subtítulos de Stremio para el torrent activo", asy
     querySelector: () => submitButton,
     addEventListener: (_event, callback) => { submit = callback; },
   };
+  const sessionNodes = new Map();
+  const sessionNode = selector => {
+    if (!sessionNodes.has(selector)) sessionNodes.set(selector, {
+      value: selector === "#subtitleLanguage" ? "es" : "0", textContent: "",
+      options: [], selectedOptions: [], addEventListener() {}, querySelector: sessionNode,
+    });
+    return sessionNodes.get(selector);
+  };
   runInNewContext(activationHtml.match(/<script>([\s\S]*?)<\/script>/)[1], {
     document: { querySelector: selector =>
       selector === "[data-subtitle-settings]" ? form :
-        selector === "[data-subtitle-settings-status]" ? settingsMessage : null },
-    URLSearchParams,
+        selector === "[data-subtitle-settings-status]" ? settingsMessage : sessionNode(selector) },
+    window: { addEventListener() {} },
+    AbortController, AbortSignal, setTimeout: () => 1, clearTimeout() {}, URLSearchParams,
     FormData: class {
       constructor() {
         const fields = new FormData();
@@ -532,8 +593,9 @@ test("carga automáticamente subtítulos de Stremio para el torrent activo", asy
       }
     },
     fetch: async (url, options) => {
-      settings = await fetch(url, options);
-      return settings;
+      const response = await fetch(new URL(url, app.baseUrl), options);
+      if (options.method === "POST") settings = response.clone();
+      return response;
     },
   });
   let prevented = false;

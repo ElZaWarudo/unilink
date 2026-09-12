@@ -27,6 +27,13 @@ test("waiting page polls without replacing the document on every timer", () => {
   assert.doesNotMatch(html, /Servir en red/);
 });
 
+test("watch controls group compact autosync next to captions without a PC configuration link", () => {
+  const html = watchPage({ active: { version: 1, title: "Movie", url: "http://example.test/video", subtitles: [] } });
+  assert.match(html, /data-player-control="captions"[\s\S]*?>CC<\/button>\s*<button data-player-control="subtitle-sync"/);
+  assert.match(html, /disabled>Auto-sync<\/button>/);
+  assert.doesNotMatch(html, /Configurar en el PC/);
+});
+
 test("restoring a preparation page returns to current session after aborting its old request", () => {
   const html = activationPage({ watchUrl: "/watch", serverInstanceId: "instance", preparing: true,
     active: { version: 12, title: "A movie" } });

@@ -6,6 +6,7 @@ import { HLS_RESOURCE, proxyHls } from "./hls.js";
 import { StremioSync } from "./stremio-sync.js";
 import { handleStremioRequest, sameOriginRequest } from "./stremio-routes.js";
 import { SubtitleSync } from "./subtitle-sync.js";
+import { SubtitleSyncStatus } from "./subtitle-sync-status.js";
 import { SpeechSetup } from "./speech-setup.js";
 
 import {
@@ -490,7 +491,7 @@ async function fillMarathonQueue({
   } finally { marathon.filling = null; }
 }
 
-function playerStatus(registry, serverInstanceId, watchUrl) {
+function playerStatus(registry, serverInstanceId, watchUrl, liveSubtitleSync) {
   const selectedSubtitle = subtitleSelection(registry.active);
   return {
     active: Boolean(registry.active),
@@ -504,6 +505,7 @@ function playerStatus(registry, serverInstanceId, watchUrl) {
     subtitleId:
       registry.active?.playbackSettings?.subtitleId ?? "",
     subtitleUrl: selectedSubtitle.url,
+    subtitleSync: liveSubtitleSync.get(registry.active, selectedSubtitle.url),
     subtitleLanguage: selectedSubtitle.subtitle?.language ?? "",
     subtitleStatus: selectedSubtitle.status,
     name:
@@ -532,13 +534,14 @@ export function createUnilinkServer({
   const serverInstanceId = randomUUID();
   const adminToken = randomUUID();
   const progressToken = randomUUID();
+  const liveSubtitleSync = new SubtitleSyncStatus();
   const stremioSync = new StremioSync({ configStore, fetchImpl });
 
   const server = createServer(async (request, response) => {
     applyCommonHeaders(response);
     const url = new URL(request.url, "http://unilink.local");
     const pathname = url.pathname;
-    if (["/watch", "/session", "/settings", "/configure", "/api/progress", "/api/subtitle-sync", "/api/speech-setup"].includes(pathname) || pathname.startsWith("/api/stremio/") || pathname.startsWith("/api/marathon/")) {
+    if (["/watch", "/session", "/settings", "/configure", "/api/progress", "/api/subtitle-sync", "/api/subtitle-sync/playback", "/api/speech-setup"].includes(pathname) || pathname.startsWith("/api/stremio/") || pathname.startsWith("/api/marathon/")) {
       response.removeHeader("Access-Control-Allow-Origin");
       response.setHeader("Referrer-Policy", "no-referrer");
       response.setHeader("X-Frame-Options", "DENY");
@@ -591,6 +594,34 @@ export function createUnilinkServer({
         } else {
           sendJson(response, 405, { error: "Método no permitido." });
         }
+        return;
+      }
+      if (pathname === "/api/subtitle-sync/playback") {
+        if (request.headers["x-unilink-token"] !== progressToken) {
+          sendJson(response, 403, { state: "error" }); return;
+        }
+        if (request.method !== "POST") { sendJson(response, 405, { state: "error" }); return; }
+        let raw = "";
+        for await (const chunk of request) {
+          raw += chunk;
+          if (Buffer.byteLength(raw) > 2048) { sendJson(response, 413, { state: "error" }); return; }
+        }
+        let body;
+        try { body = JSON.parse(raw); } catch { sendJson(response, 400, { state: "error" }); return; }
+        if (!body || typeof body.clientId !== "string" || !body.clientId.length || body.clientId.length > 100 ||
+            !Number.isSafeInteger(body.sequence) || body.sequence < 0 || typeof body.enabled !== "boolean" ||
+            !["off", "waiting", "working", "ready", "insufficient", "busy", "unavailable", "stale", "error"].includes(body.state) ||
+            !Number.isFinite(body.automaticOffset) || Math.abs(body.automaticOffset) > 120 ||
+            !Number.isFinite(body.manualBaseline) || Math.abs(body.manualBaseline) > 30 ||
+            !Number.isFinite(body.time) || body.time < 0 || body.time > 28800) {
+          sendJson(response, 400, { state: "error" }); return;
+        }
+        const active = registry.active;
+        const selected = subtitleSelection(active);
+        if (!active || body.serverInstanceId !== serverInstanceId || body.version !== active.version ||
+            !selected.url || body.subtitleUrl !== selected.url) { rejectStale(); return; }
+        liveSubtitleSync.record(active, selected.url, body);
+        sendJson(response, 200, { state: "accepted" });
         return;
       }
       if (pathname === "/api/subtitle-sync") {
@@ -885,7 +916,7 @@ export function createUnilinkServer({
           sendJson(
             response,
             200,
-            playerStatus(registry, serverInstanceId, watchUrl),
+            playerStatus(registry, serverInstanceId, watchUrl, liveSubtitleSync),
           );
         } else {
           sendHtml(
@@ -915,7 +946,7 @@ export function createUnilinkServer({
         sendJson(
           response,
           200,
-          playerStatus(registry, serverInstanceId, watchUrl),
+          playerStatus(registry, serverInstanceId, watchUrl, liveSubtitleSync),
         );
         return;
       }
@@ -939,7 +970,7 @@ export function createUnilinkServer({
         sendJson(
           response,
           200,
-          playerStatus(registry, serverInstanceId, watchUrl),
+          playerStatus(registry, serverInstanceId, watchUrl, liveSubtitleSync),
         );
         return;
       }
@@ -956,7 +987,7 @@ export function createUnilinkServer({
         sendJson(
           response,
           200,
-          playerStatus(registry, serverInstanceId, watchUrl),
+          playerStatus(registry, serverInstanceId, watchUrl, liveSubtitleSync),
         );
         return;
       }
@@ -974,14 +1005,14 @@ export function createUnilinkServer({
         sendJson(
           response,
           200,
-          playerStatus(registry, serverInstanceId, watchUrl),
+          playerStatus(registry, serverInstanceId, watchUrl, liveSubtitleSync),
         );
         return;
       }
 
       if (pathname === "/api/marathon/undo" && request.method === "POST") {
         registry.undoMarathonRemoval();
-        sendJson(response, 200, playerStatus(registry, serverInstanceId, watchUrl));
+        sendJson(response, 200, playerStatus(registry, serverInstanceId, watchUrl, liveSubtitleSync));
         return;
       }
 
@@ -997,7 +1028,7 @@ export function createUnilinkServer({
         } catch (error) {
           sendJson(response, 409, {
             error: error.message,
-            ...playerStatus(registry, serverInstanceId, watchUrl),
+            ...playerStatus(registry, serverInstanceId, watchUrl, liveSubtitleSync),
           });
           return;
         }
@@ -1015,7 +1046,7 @@ export function createUnilinkServer({
         sendJson(
           response,
           200,
-          playerStatus(registry, serverInstanceId, watchUrl),
+          playerStatus(registry, serverInstanceId, watchUrl, liveSubtitleSync),
         );
         return;
       }

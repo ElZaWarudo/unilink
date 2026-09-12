@@ -113,14 +113,14 @@ test("source changes discard an in-flight result", async () => {
 
 test("late response cancellation cannot cancel the new seek generation's job", async t => {
   const flush = () => new Promise(resolve => setImmediate(resolve));
-  let releaseFirst, finishRecognition, posts = 0, clock = 0, latest;
+  let releaseFirst, finishRecognition, posts = 0, latest;
   const timers = new Map();
   let timerId = 0;
   const sync = new SubtitleSync({ maxConcurrent: 1, run: (_, signal) => new Promise((resolve, reject) => {
     finishRecognition = resolve;
     signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
   }) });
-  const controller = createSubtitleSyncController({ token: "test", now: () => clock,
+  const controller = createSubtitleSyncController({ token: "test",
     setTimer(fn) { timers.set(++timerId, fn); return timerId; }, clearTimer(id) { timers.delete(id); },
     onChange(value) { latest = value; },
     fetchImpl: async (url, options) => {
@@ -141,8 +141,8 @@ test("late response cancellation cannot cancel the new seek generation's job", a
   assert.equal(latest.state, "busy");
   releaseFirst(); await flush();
   assert.equal(sync.active, null);
-  clock = 10000;
-  controller.tick(130, 900); await flush();
+  const [retryId, retry] = timers.entries().next().value;
+  timers.delete(retryId); retry(); await flush();
   assert.equal(posts, 3);
   finishRecognition({ state: "ready", result }); await flush();
   const [id, poll] = timers.entries().next().value;

@@ -35,10 +35,10 @@ class Element {
   focus() { document.activeElement = this; }
 }
 
-function harness(t, { subtitleUrl = "", subtitleDelay = 0, hlsUrl = "", fetchImpl, storageFails = false } = {}) {
+function harness(t, { subtitleUrl = "", subtitleDelay = 0, hlsUrl = "", progressToken = "", fetchImpl, storageFails = false } = {}) {
   const doc = new Element(); doc.createElement = tag => new Element(tag); doc.body = new Element("body"); doc.activeElement = doc.body;
   const win = new Element(); let reloads = 0; win.location = { reload() { reloads++; } };
-  const root = new Element(); root.dataset = { version: "3", serverInstanceId: "instance", subtitleUrl, subtitleDelay: String(subtitleDelay), subtitleLanguage: "en", hlsUrl, resumeKey: "movie" }; doc.append(root);
+  const root = new Element(); root.dataset = { version: "3", serverInstanceId: "instance", subtitleUrl, subtitleDelay: String(subtitleDelay), subtitleLanguage: "en", hlsUrl, progressToken, resumeKey: "movie" }; doc.append(root);
   const video = new Element("video"); Object.assign(video, { volume: 0.6, muted: false, paused: true, ended: false, currentTime: 120, duration: 1800, readyState: 3 }); root.append(video);
   const controls = new Element(); controls.className = "player-controls"; root.append(controls);
   const parts = {};
@@ -249,6 +249,7 @@ test("queue operations acknowledge immediately, protect session, restore focus a
 
 test("autosync replaces a saved manual delay and later fine-tuning remains relative", async t => {
   let instance, manualDelay = -2;
+  const reports = [];
   class FakeHls {
     static isSupported = () => true;
     static Events = { AUDIO_TRACKS_UPDATED: "tracks", AUDIO_TRACK_SWITCHED: "switched", ERROR: "error" };
@@ -258,8 +259,10 @@ test("autosync replaces a saved manual delay and later fine-tuning remains relat
   }
   const previous = globalThis.Hls; globalThis.Hls = FakeHls;
   t.after(() => { globalThis.Hls = previous; });
-  const h = harness(t, { hlsUrl:"/master.m3u8", subtitleUrl:"/en.vtt", subtitleDelay:manualDelay,
+  const h = harness(t, { hlsUrl:"/master.m3u8", subtitleUrl:"/en.vtt", subtitleDelay:manualDelay, progressToken: "secret",
     fetchImpl: async (url, options) => {
+      if (url === "/api/subtitle-sync/playback") { reports.push(JSON.parse(options.body)); return Response.json({}); }
+      if (url === "/api/progress") return Response.json({state:"saved"});
       if (url === "/en.vtt") return new Response("WEBVTT\n\n00:02:00.000 --> 00:02:01.000\nAligned phrase\n");
       if (url === "/api/status") return Response.json({version:3,serverInstanceId:"instance",subtitleUrl:"/en.vtt",subtitleDelay:manualDelay});
       if (url === "/api/subtitle-sync") return Response.json(options.method === "POST"
@@ -275,11 +278,20 @@ test("autosync replaces a saved manual delay and later fine-tuning remains relat
   assert.equal(h.parts["subtitle-sync-status"].textContent,"Tramo sincronizado");
   assert.equal(h.parts.caption.textContent,"Aligned phrase","saved -2s must not offset the automatic match");
   assert.equal(h.root.dataset.currentDelay,"0");
+  assert.equal(reports.at(-1).automaticOffset, 1);
+  assert.equal(reports.at(-1).manualBaseline, -2);
+  assert.equal(reports.at(-1).enabled, true);
   manualDelay = -1;
   await h.player.pollStatus();
   assert.equal(h.root.dataset.currentDelay,"1","a later +1s manual change still shifts automatic timing");
   h.video.currentTime = 122.5; await h.video.emit("timeupdate");
   assert.equal(h.parts.caption.textContent,"Aligned phrase");
+  h.expire(3000); await settle();
+  assert.equal(reports.at(-1).automaticOffset, 1, "manual +1 is not added to the automatic report");
+  assert.equal(reports.at(-1).manualBaseline, -2);
+  assert.equal(reports.at(-1).time, 122.5);
   await h.parts["subtitle-sync"].emit("click"); await settle();
   assert.equal(h.root.dataset.currentDelay,"-1","disabling auto restores ordinary manual timing");
+  assert.equal(reports.at(-1).enabled, false);
+  assert.equal(reports.at(-1).manualBaseline, 0);
 });

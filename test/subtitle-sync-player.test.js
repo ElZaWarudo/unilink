@@ -7,10 +7,10 @@ const context = { version: 1, serverInstanceId: "server", subtitleUrl: "/subtitl
 const correction = { start: 10, end: 50, offset: 2, anchors: 5, residual: 0.1 };
 
 function harness(handler) {
-  const requests = [], timers = new Map(), changes = [];
+  const requests = [], timers = new Map(), changes = [], delays = [];
   let id = 0, clock = 0;
   const controller = createSubtitleSyncController({ token: "secret", now: () => clock,
-    setTimer(fn) { timers.set(++id, fn); return id; }, clearTimer(key) { timers.delete(key); },
+    setTimer(fn, delay) { delays.push(delay); timers.set(++id, fn); return id; }, clearTimer(key) { timers.delete(key); },
     onChange(change) { changes.push(change); },
     fetchImpl: async (url, options) => {
       requests.push({ url, ...options });
@@ -21,7 +21,7 @@ function harness(handler) {
   });
   controller.setContext(context);
   controller.tick(20, 900);
-  return { controller, requests, timers, changes, advance(ms) { clock += ms; },
+  return { controller, requests, timers, changes, delays, advance(ms) { clock += ms; },
     async poll() { const entry = timers.entries().next().value; assert.ok(entry); timers.delete(entry[0]); entry[1](); await flush(); } };
 }
 
@@ -124,9 +124,89 @@ test("low confidence retries a new minute only and busy uses backoff", async () 
   state = "busy"; h.controller.tick(65, 900); await flush();
   h.controller.tick(66, 900); await flush();
   assert.equal(h.requests.filter(request => request.method === "POST").length, 2);
-  h.advance(10000); h.controller.tick(67, 900); await flush();
+  h.advance(10000); await h.poll();
   assert.equal(h.requests.filter(request => request.method === "POST").length, 3);
   h.controller.destroy();
+});
+
+test("transient failures retry while paused with bounded backoff and recover the failed minute", async () => {
+  let failures = 8;
+  const h = harness(async () => {
+    if (failures-- > 0) throw new Error("offline");
+    return { state: "ready", result: correction };
+  });
+  await h.controller.setEnabled(true); await flush();
+  assert.equal(h.timers.size, 1);
+  for (let index = 0; index < 8; index++) await h.poll();
+  assert.deepEqual(h.delays, [2000, 4000, 8000, 16000, 30000, 30000, 30000, 30000]);
+  assert.equal(h.changes.at(-1).state, "ready");
+  assert.deepEqual(h.changes.at(-1).corrections, [correction]);
+  assert.equal(h.timers.size, 0);
+  h.controller.destroy();
+});
+
+test("poll failure cancels the orphan and preserves good corrections during retry", async () => {
+  let posts = 0;
+  const h = harness(async (_url, options) => {
+    if (options.method === "DELETE") return { state: "cancelled" };
+    if (options.method === "POST") return ++posts === 1
+      ? { state: "ready", result: correction } : { state: "working", jobId: `job-${posts}` };
+    throw new Error("lost response");
+  });
+  await h.controller.setEnabled(true); await flush();
+  h.controller.tick(80, 900); await flush(); await h.poll();
+  assert.equal(h.changes.at(-1).state, "error");
+  assert.deepEqual(h.changes.at(-1).corrections, [correction]);
+  assert.ok(h.requests.some(item => item.method === "DELETE" && item.url.endsWith("job-2")));
+  await h.poll();
+  assert.equal(posts, 3);
+  await h.controller.setEnabled(false);
+  assert.equal(h.timers.size, 0);
+  h.controller.tick(90, 900); await flush(); assert.equal(posts, 3);
+});
+
+test("capability retries recover availability and stale remains terminal", async () => {
+  const timers = new Map(), changes = [];
+  let id = 0, capabilities = 0, posts = 0;
+  const controller = createSubtitleSyncController({ token: "secret",
+    setTimer(fn) { timers.set(++id, fn); return id; }, clearTimer(key) { timers.delete(key); },
+    onChange(change) { changes.push(change); }, fetchImpl: async (_url, options) => {
+      if (options.method === "POST") { posts++; return Response.json({ state: "stale" }); }
+      return Response.json({ available: ++capabilities > 1 });
+    } });
+  controller.setContext(context); controller.tick(20, 900); await controller.setEnabled(true);
+  assert.equal(changes.at(-1).state, "unavailable"); assert.equal(timers.size, 1);
+  const [key, retry] = timers.entries().next().value; timers.delete(key); retry(); await flush();
+  assert.equal(capabilities, 2); assert.equal(posts, 1);
+  assert.equal(changes.at(-1).state, "stale"); assert.equal(timers.size, 0);
+  controller.seek(80, 900); assert.equal(posts, 1);
+  await controller.setEnabled(false); await controller.setEnabled(true);
+  assert.equal(posts, 1, "a stale session cannot be resurrected by toggling");
+  controller.destroy();
+});
+
+test("source change cancels a scheduled retry and an already queued callback cannot resurrect it", async () => {
+  const h = harness(async () => { throw Error("offline"); });
+  await h.controller.setEnabled(true); await flush();
+  const queued = h.timers.values().next().value;
+  h.controller.setContext({ ...context, subtitleUrl: "/next.vtt" });
+  assert.equal(h.timers.size, 0);
+  const requests = h.requests.length; queued(); await flush();
+  assert.equal(h.requests.length, requests); assert.equal(h.changes.at(-1).enabled, false);
+  h.controller.destroy();
+});
+
+test("late capability response after disabling cannot start recognition", async () => {
+  let resolveCapability; const requests = [];
+  const controller = createSubtitleSyncController({ token: "secret", fetchImpl: (url, options) => {
+    requests.push({ url, ...options }); return new Promise(resolve => { resolveCapability = resolve; });
+  } });
+  controller.setContext(context); controller.tick(20, 900);
+  const enabling = controller.setEnabled(true);
+  await controller.setEnabled(false);
+  resolveCapability(Response.json({ available: true })); await enabling;
+  assert.equal(requests.length, 1);
+  controller.destroy();
 });
 
 test("seek invalidates pending position and destroy prevents late corrections", async () => {

@@ -379,6 +379,9 @@ function layout(
       font-size: .9rem;
       font-weight: 720;
     }
+    .subtitle-sync-current { color: var(--text); font-size: 14px; }
+    .subtitle-sync-current output { font-weight: 700; }
+    .subtitle-sync-current span { color: var(--muted); font-size: 12px; }
     .delay-stepper {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -596,7 +599,7 @@ function layout(
       bottom: 0;
       left: 0;
       display: none;
-      padding: var(--space-3);
+      padding: 10px 16px;
       background: rgb(11 13 14 / .94);
     }
     .player.is-enhanced .player-controls {
@@ -630,12 +633,13 @@ function layout(
       display: flex;
       align-items: center;
       gap: var(--space-2);
-      margin-top: var(--space-2);
+      margin-top: 2px;
     }
     .player-control-row .control-spacer { flex: 1; }
-    .player-sync-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 8px; }
-    .player-sync-row [role="status"] { flex: 1 1 170px; min-width: 0; font-size: 12px; line-height: 1.4; color: var(--muted); }
-    .player-sync-row button { font-size: 12px; }
+    .player-sync-row { display: flex; align-items: center; gap: 8px; }
+    .player-sync-row [role="status"] { min-width: 0; font-size: 11px; line-height: 1.3; color: var(--muted); }
+    .player-sync-row [role="status"]:empty { display: none; }
+    .player-controls [data-player-control="subtitle-sync"] { font-size: 11px; padding-inline: 6px; white-space: nowrap; }
     .player-controls button {
       min-width: 44px;
       min-height: 44px;
@@ -1174,6 +1178,8 @@ export function activationPage({
     ? `<form method="post" action="/settings" data-subtitle-settings>
          <input type="hidden" name="serverInstanceId" value="${escapeHtml(serverInstanceId)}">
          <input type="hidden" name="version" value="${escapeHtml(active.version)}">
+         <p class="subtitle-sync-current">Sincronización actual: <output data-subtitle-sync-current aria-live="polite">Esperando al reproductor…</output><br>
+           <span data-subtitle-sync-state>Se actualizará mientras el reproductor esté abierto.</span></p>
          <div class="fields">
            <div class="field">
              <label for="subtitleLanguage">Idioma preferido</label>
@@ -1215,6 +1221,19 @@ export function activationPage({
      const delayOutput=document.querySelector("[data-subtitle-delay-output]");
      const settingsForm=document.querySelector("[data-subtitle-settings]");
      const settingsStatus=document.querySelector("[data-subtitle-settings-status]");
+     const delayLabel=document.querySelector("#subtitleDelayLabel");
+     const currentSync=document.querySelector("[data-subtitle-sync-current]");
+     const syncState=document.querySelector("[data-subtitle-sync-state]");
+     let editorBaseline=0, settingsDirty=false, settingsStopped=false, editRevision=0, settingsGeneration=0;
+     let settingsTimer;
+     let settingsController=new AbortController();
+     const formatDelay=value=>{
+       const rounded=Number(Number(value).toFixed(2));
+       return (rounded>0?"+":rounded<0?"−":"")+Math.abs(rounded).toFixed(2).replace(".",",")+" s";
+     };
+     const markDirty=()=>{settingsDirty=true;editRevision++;};
+     languageSelect?.addEventListener("change",markDirty);
+     sourceSelect?.addEventListener("change",markDirty);
      const sourceByLanguage=new Map();
      const syncSubtitleSources=()=>{
        if(!languageSelect||!sourceSelect)return;
@@ -1248,19 +1267,65 @@ export function activationPage({
        if(!delayInput||!delayOutput)return;
        const delay=normalizeDelay(value);
        delayInput.value=String(delay);
-       const sign=delay>0?"+":delay<0?"−":"";
-       delayOutput.textContent=sign+Math.abs(delay).toFixed(2).replace(".",",")+" s";
+       delayOutput.textContent=formatDelay(delay-editorBaseline);
+     };
+     const stopForStale=()=>{
+       settingsStopped=true;
+       clearTimeout(settingsTimer);
+       settingsStatus.textContent="La fuente ha cambiado. Abre la emisión actual antes de aplicar ajustes.";
+       currentSync.textContent="Emisión anterior";
+       syncState.textContent="Abre la emisión actual para ver su sincronización.";
+     };
+     const reconcileSettings=status=>{
+       if(!status.active||status.serverInstanceId!==${JSON.stringify(serverInstanceId)}||status.version!==${Number(active.version)}){
+         stopForStale();return;
+       }
+       const live=status.subtitleSync;
+       const valid=live&&Number.isFinite(live.effectiveDelay)&&Number.isFinite(live.manualBaseline);
+       currentSync.textContent=valid?formatDelay(live.effectiveDelay):"Esperando al reproductor…";
+       syncState.textContent=!valid?"Sin información reciente del reproductor.":live.enabled?
+         (live.state==="ready"?"Auto-sync activo":"Auto-sync activo · comprobando el diálogo"):
+         "Sincronización manual";
+       if(settingsDirty)return;
+       const editorAuto=Boolean(valid&&live.enabled);
+       editorBaseline=editorAuto?live.manualBaseline:0;
+       delayLabel.textContent=editorAuto?"Ajuste adicional":"Sincronización";
+       delayStepper.querySelector("[data-subtitle-delay-reset]").textContent=editorAuto?"Restablecer ajuste a 0,00 s":"Restablecer a 0,00 s";
+       if(typeof status.subtitleLanguage==="string")languageSelect.value=status.subtitleLanguage;
+       if(typeof status.subtitleId==="string")sourceSelect.value=status.subtitleId;
+       syncSubtitleSources();
+       renderDelay(status.subtitleDelay);
+     };
+     const pollSettings=async()=>{
+       if(settingsStopped)return;
+       const generation=settingsGeneration;
+       const controller=settingsController;
+       try{
+         const response=await fetch("/api/status",{signal:AbortSignal.any([controller.signal,AbortSignal.timeout(10000)])});
+         if(!response.ok)throw new Error("status");
+         const status=await response.json();
+         if(!settingsStopped&&!controller.signal.aborted&&generation===settingsGeneration)reconcileSettings(status);
+       }catch{
+         if(settingsStopped||controller.signal.aborted)return;
+         currentSync.textContent="Sin conexión";
+         syncState.textContent="Reintentando obtener la sincronización…";
+       }
+       if(!settingsStopped&&!controller.signal.aborted)settingsTimer=setTimeout(pollSettings,2000);
      };
      delayStepper?.addEventListener("click",event=>{
        const change=event.target.closest?.("[data-subtitle-delay-change]");
        const reset=event.target.closest?.("[data-subtitle-delay-reset]");
+       if(change||reset)markDirty();
        if(change)renderDelay(Number(delayInput.value)+Number(change.dataset.subtitleDelayChange));
-       if(reset)renderDelay(0);
+       if(reset)renderDelay(editorBaseline);
      });
      renderDelay(delayInput?.value);
      settingsForm?.addEventListener("submit",async event=>{
        event.preventDefault();
+       if(settingsStopped)return;
        const submitButton=settingsForm.querySelector('[type="submit"]');
+       const submittedRevision=editRevision;
+       settingsGeneration++;
        submitButton.disabled=true;
        settingsStatus.textContent="Aplicando…";
        try{
@@ -1270,16 +1335,27 @@ export function activationPage({
            body:new URLSearchParams(new FormData(settingsForm))
          });
          if(response.status===409){
-           settingsStatus.textContent="La fuente ha cambiado. Abre la emisión actual antes de aplicar ajustes.";
+           stopForStale();
            return;
          }
          if(!response.ok)throw new Error("HTTP "+response.status);
+         const status=await response.json();
+         if(settingsStopped)return;
+         settingsGeneration++;
+         settingsDirty=editRevision!==submittedRevision;
+         reconcileSettings(status);
+         if(settingsStopped)return;
          settingsStatus.textContent="Subtítulos actualizados en el reproductor activo.";
        }catch{
          settingsStatus.textContent="No se pudieron actualizar los subtítulos.";
        }finally{
          submitButton.disabled=false;
        }
+     });
+     if(settingsForm)pollSettings();
+     window.addEventListener("pagehide",()=>{settingsStopped=true;clearTimeout(settingsTimer);settingsController.abort();});
+     window.addEventListener("pageshow",event=>{
+       if(event.persisted&&settingsForm){settingsStopped=false;settingsController=new AbortController();pollSettings();}
      });
      copyButton?.addEventListener("click",async()=>{
        let copied=false;
@@ -1344,7 +1420,12 @@ export function activationPage({
               document.querySelector('[data-preparation-state]').textContent = 'La fuente ha cambiado. Abre la emisión actual para continuar.';
               return;
             }
-            if (!status.preparing) { location.replace('/session'); return; }
+            if (!status.preparing) {
+              if (typeof settingsDirty !== 'undefined' && settingsDirty) {
+                document.querySelector('[data-preparation-state]').textContent = 'Preparación completa. Tus ajustes pendientes se conservan.';
+              } else location.replace('/session');
+              return;
+            }
           } catch {
             if (stopped) return;
             document.querySelector('[data-preparation-state]').textContent = 'No se pudo comprobar la preparación. Reintentando…';
@@ -1574,15 +1655,15 @@ export function watchPage({
            <button data-player-control="captions" type="button"
              aria-label="Activar o desactivar subtítulos" aria-pressed="true"
              ${selectedSubtitle ? "disabled" : 'disabled title="Subtítulos no disponibles"'}>CC</button>
+           <button data-player-control="subtitle-sync" type="button" aria-pressed="false"
+             aria-label="Sincronización automática de subtítulos en inglés"
+             aria-describedby="subtitleSyncStatus" disabled>Auto-sync</button>
            <button data-player-control="fullscreen" type="button"
              aria-label="Pantalla completa" title="Pantalla completa (F)">⛶</button>
          </div>
          <div class="player-sync-row">
            <button data-player-control="subtitle-retry" type="button" hidden>Reintentar subtítulos</button>
-           <button data-player-control="subtitle-sync" type="button" aria-pressed="false"
-             aria-describedby="subtitleSyncStatus" disabled>Auto-sync inglés</button>
            <span id="subtitleSyncStatus" data-player-part="subtitle-sync-status" role="status" aria-live="polite">Requiere subtítulos y audio en inglés</span>
-           <a href="/configure#speech-setup">Configurar en el PC</a>
          </div>
        </div>
        </div>
