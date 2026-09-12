@@ -3,6 +3,7 @@ import { access, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve, delimiter } from "node:path";
 import { randomUUID } from "node:crypto";
+import { SpeechService } from "./speech-service.js";
 
 export function speechPaths(env = process.env) {
   const home = resolve(env.UNILINK_SUBTITLE_SYNC_HOME || join(homedir(), ".unilink", "subtitle-sync"));
@@ -98,18 +99,30 @@ export function validCorrection(result, window) {
 }
 
 export class SubtitleSync {
-  constructor({ run = runSpeech, available = speechAvailable, timeoutMs = 180000, now = Date.now } = {}) {
-    this.run = run;
+  constructor({ run, available = speechAvailable, timeoutMs = 180000, now = Date.now, maxConcurrent = 2 } = {}) {
+    this.service = run ? null : new SpeechService({ paths: speechPaths() });
+    this.run = run || (async (input, signal, progress) => {
+      const paths = this.service.paths;
+      paths.ffmpeg = await resolveExecutable(paths.ffmpeg);
+      paths.ffprobe = await resolveExecutable(paths.ffprobe);
+      return this.service.run(input, signal, progress);
+    });
     this.available = available;
     this.timeoutMs = timeoutMs;
     this.now = now;
     this.jobs = new Map();
-    this.active = null;
+    this.running = new Set();
+    this.maxConcurrent = Math.max(1, Math.min(2, maxConcurrent));
+    this.closed = false;
+    this.releasing = null;
   }
+
+  get active() { return this.running.values().next().value || null; }
 
   view(job) {
     if (!job) return { state: "stale" };
     return { state: job.state, jobId: job.id, ...(job.result ? { result: job.result } : {}),
+      ...(job.state === "working" ? { stage: job.stage, elapsedMs: Math.max(0, this.now() - job.created) } : {}),
       ...(job.reason ? { reason: job.reason } : {}) };
   }
 
@@ -129,25 +142,33 @@ export class SubtitleSync {
   }
 
   start({ key, isCurrent, prepare, window, requestId }) {
+    if (this.closed) return { state: "unavailable" };
+    if (this.releasing) return { state: "busy" };
     if (!isCurrent()) return { state: "stale" };
     for (const [id, job] of this.jobs) {
       if (!job.isCurrent() || this.now() - job.created > 600000) {
         this.cancel(id, "stale");
-        if (job !== this.active) this.jobs.delete(id);
+        if (!this.running.has(job)) this.jobs.delete(id);
       } else if (job.key === key && ["working", "ready", "insufficient"].includes(job.state) &&
           (job.state !== "working" || job.requestId === requestId)) return this.view(job);
     }
-    if (this.active) return { state: "busy" };
-    while (this.jobs.size >= 32) this.jobs.delete(this.jobs.keys().next().value);
-    const job = { id: randomUUID(), key, requestId, isCurrent, state: "working", created: this.now(), controller: new AbortController() };
+    if (this.running.size >= this.maxConcurrent) return { state: "busy" };
+    while (this.jobs.size >= 32) {
+      const oldest = [...this.jobs].find(([, job]) => !this.running.has(job));
+      if (!oldest) return { state: "busy" };
+      this.jobs.delete(oldest[0]);
+    }
+    const job = { id: randomUUID(), key, requestId, isCurrent, state: "working", stage: "preparing", created: this.now(), controller: new AbortController() };
     this.jobs.set(job.id, job);
-    this.active = job;
+    this.running.add(job);
     const timer = setTimeout(() => { this.cancel(job.id, "error"); job.reason = "timeout"; }, this.timeoutMs);
     const staleTimer = setInterval(() => { if (!isCurrent()) this.cancel(job.id, "stale"); }, 1000);
     Promise.resolve().then(async () => {
       const input = await prepare(job.controller.signal);
       if (job.controller.signal.aborted || !isCurrent()) return;
-      const outcome = await this.run({ ...input, ...window }, job.controller.signal);
+      const outcome = await this.run({ ...input, ...window }, job.controller.signal, stage => {
+        if (!job.controller.signal.aborted && ["extracting", "loading_model", "queued", "recognizing", "matching"].includes(stage)) job.stage = stage;
+      });
       if (job.controller.signal.aborted || !isCurrent()) return;
       if (outcome.state === "ready" && validCorrection(outcome.result, window)) {
         job.state = "ready";
@@ -160,10 +181,21 @@ export class SubtitleSync {
       if (!isCurrent()) job.state = "stale";
       clearTimeout(timer);
       clearInterval(staleTimer);
-      if (this.active === job) this.active = null;
+      this.running.delete(job);
     });
     return this.view(job);
   }
 
-  close() { if (this.active) this.cancel(this.active.id); }
+  release() {
+    if (!this.releasing) this.releasing = (async () => {
+      for (const job of this.running) this.cancel(job.id);
+      if (this.service) {
+        await this.service.close();
+        if (!this.closed) this.service = new SpeechService({ paths: speechPaths() });
+      }
+    })().finally(() => { this.releasing = null; });
+    return this.releasing;
+  }
+
+  close() { this.closed = true; return this.release(); }
 }

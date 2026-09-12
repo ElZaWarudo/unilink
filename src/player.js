@@ -227,6 +227,16 @@ export function startAudioPlayback({ video, select, url, onError, onRecovered = 
   let pendingError = null;
   let recoveryAttempted = false;
   let recoveryPosition = null;
+  let recoveryFrames = null;
+  const renderedFrames = () => {
+    try {
+      const quality = video.getVideoPlaybackQuality?.();
+      if (quality && Number.isFinite(quality.totalVideoFrames) && Number.isFinite(quality.droppedVideoFrames))
+        return Math.max(0, quality.totalVideoFrames - quality.droppedVideoFrames);
+      if (Number.isFinite(video.webkitDecodedFrameCount)) return video.webkitDecodedFrameCount;
+    } catch { /* Older TV browsers may not expose frame counters. */ }
+    return null;
+  };
   let tracks = [];
   let preference;
   try { preference = JSON.parse(localStorage.getItem("unilink:audio") || "null"); } catch { /* Playback works without storage. */ }
@@ -297,6 +307,7 @@ export function startAudioPlayback({ video, select, url, onError, onRecovered = 
     pendingError = null;
     recoveryAttempted = true;
     recoveryPosition = video.currentTime;
+    recoveryFrames = renderedFrames();
     if (error.type === "mediaError") {
       const wasPlaying = !video.paused;
       hls.recoverMediaError();
@@ -312,6 +323,12 @@ export function startAudioPlayback({ video, select, url, onError, onRecovered = 
   };
   const recoveredProgress = () => {
     if (recoveryPosition === null || video.paused || video.currentTime <= recoveryPosition + 1) return;
+    if (video.videoWidth === 0) return;
+    const frames = renderedFrames();
+    if (frames !== null) {
+      if (recoveryFrames === null || frames < recoveryFrames) recoveryFrames = 0;
+      if (frames <= recoveryFrames) return;
+    }
     recoveryPosition = null;
     recoveryAttempted = false;
     pendingError = null;
@@ -414,12 +431,18 @@ export function alignedSubtitleCues(cues, corrections) {
     const clientId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   let context = {}, enabled = false, disposed = false, generation = 0;
   let jobId = null, timer = null, busy = false, corrections = [], state = "off";
+  let stage = null, elapsedMs = 0;
   let attempted = new Map(), retryAfter = 0, position = 0, duration = 0, pendingBucket = null;
   const headers = { "content-type": "application/json", "x-unilink-token": token };
   const eligible = () => context.captions && isEnglishLanguage(context.subtitleLanguage) &&
     Number.isInteger(context.audioIndex) && context.audioIndex >= 0 &&
     (!context.audioLanguage || /^(und|unknown)$/i.test(context.audioLanguage) || isEnglishLanguage(context.audioLanguage));
-  const emit = next => { state = next; onChange({ state, enabled, eligible: Boolean(eligible()), corrections }); };
+  const emit = (next, progress = {}) => {
+    state = next;
+    stage = next === "working" ? progress.stage || null : null;
+    elapsedMs = next === "working" && Number.isFinite(progress.elapsedMs) ? Math.max(0, progress.elapsedMs) : 0;
+    onChange({ state, stage, elapsedMs, enabled, eligible: Boolean(eligible()), corrections });
+  };
   const cancelJob = id => {
     if (id) fetchImpl(`/api/subtitle-sync?job=${encodeURIComponent(id)}`, { method: "DELETE", headers }).catch(() => {});
   };
@@ -451,7 +474,7 @@ export function alignedSubtitleCues(cues, corrections) {
       }
       jobId = result.jobId || null;
         if (result.state === "working") {
-          if (state !== "working") emit("working");
+          if (state !== "working" || stage !== (result.stage || null) || elapsedMs !== (result.elapsedMs || 0)) emit("working", result);
         timer = setTimer(() => { timer = null; run(time, bucket, epoch, true); }, 1000);
       } else {
         attempted.set(bucket, result.state);
@@ -641,7 +664,7 @@ export function startPlayer(root) {
   let syncedCues = [], syncEnabled = false;
   const subtitleSync = createSubtitleSyncController({
     token: root.dataset.progressToken,
-    onChange({ state, enabled, eligible, corrections }) {
+    onChange({ state, stage, elapsedMs, enabled, eligible, corrections }) {
       syncEnabled = enabled;
       syncedCues = enabled ? alignedSubtitleCues(cues, corrections) : cues;
       if (syncButton) {
@@ -661,7 +684,11 @@ export function startPlayer(root) {
           error: "No se pudo sincronizar. Desactiva y activa para reintentar",
           stale: "La fuente ha cambiado. Desactiva y activa para reintentar",
         };
-        const text = boundaryRejected ? "No se puede ajustar este tramo sin solapar subtítulos" : labels[state] || "";
+        const stages = { preparing: "Preparando subtítulos", extracting: "Extrayendo audio",
+          loading_model: "Cargando motor de voz", queued: "Esperando al motor",
+          recognizing: "Reconociendo diálogo", matching: "Comprobando coincidencias" };
+        const working = stages[stage] ? `${stages[stage]}… ${Math.floor(elapsedMs / 1000)} s` : labels.working;
+        const text = boundaryRejected ? "No se puede ajustar este tramo sin solapar subtítulos" : state === "working" ? working : labels[state] || "";
         if (syncStatus.textContent !== text) syncStatus.textContent = text;
       }
       renderCaption();
@@ -1483,12 +1510,14 @@ export function startPlayer(root) {
   });
   video.addEventListener("canplay", () => setMessage());
   video.addEventListener("error", () => {
-    playbackFailure = "No se pudo reproducir esta fuente. Pulsa Reintentar; si continúa, elige otra en Stremio.";
+    const reasons = { 2: "Se interrumpió la conexión del vídeo.",
+      3: "El navegador no pudo decodificar el vídeo (error 3).",
+      4: "El navegador no admite esta fuente de vídeo (error 4)." };
+    playbackFailure = `${reasons[video.error?.code] || "No se pudo reproducir esta fuente."} Pulsa Reintentar; si continúa, elige otra en Stremio.`;
+    video.pause?.();
     showControls({ schedule: false });
     if (retryButton) retryButton.hidden = false;
-    setMessage(
-      "No se pudo reproducir esta fuente. Pulsa Reintentar; si continúa, elige otra en Stremio.",
-    );
+    setMessage(playbackFailure);
   });
 
   seek.addEventListener("input", () => {

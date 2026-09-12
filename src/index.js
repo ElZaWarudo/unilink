@@ -37,7 +37,10 @@ server.listen(port, host, () => {
 });
 
 function shutdown() {
-  server.close(() => process.exit(0));
+  server.shutdown().then(() => process.exit(0)).catch(() => {
+    console.error("No se pudo confirmar el cierre del motor de voz. Vuelve a solicitar el cierre para reintentarlo.");
+    process.exitCode = 1;
+  });
 }
 
 process.on("SIGINT", shutdown);

@@ -166,7 +166,12 @@ test("reanuda la carga HLS tras un fallo durante la pausa sin perder posición",
   assert.equal(recoveries, 0, "el búfer antiguo no borra un segundo error fatal");
   playback.resume();
   assert.equal(instance.starts, 2, "otra acción explícita puede reintentar");
+  let frames = 0;
+  video.getVideoPlaybackQuality = () => ({ totalVideoFrames: frames, droppedVideoFrames: 0 });
   video.currentTime = 125;
+  video.dispatchEvent(new Event("timeupdate"));
+  assert.equal(recoveries, 0, "el audio avanzando sin imágenes no confirma recuperación");
+  frames = 2;
   video.dispatchEvent(new Event("timeupdate"));
   assert.equal(recoveries, 1);
   video.paused = true;
@@ -177,6 +182,7 @@ test("reanuda la carga HLS tras un fallo durante la pausa sin perder posición",
   assert.equal(video.paused, true, "recuperar una pausa no reproduce por sí solo");
   video.paused = false;
   video.currentTime = 128;
+  frames = 3;
   video.dispatchEvent(new Event("timeupdate"));
   instance.callbacks.error(null, { fatal: true, type: "mediaError" });
   assert.equal(video.paused, false, "una reconexión automática conserva la intención de reproducir");

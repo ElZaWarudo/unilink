@@ -73,6 +73,18 @@ test("opt-in polls one job and applies a ready response once", async () => {
   h.controller.destroy();
 });
 
+test("working updates expose the current stage and elapsed time", async () => {
+  const h = harness(async (_url, options) => options.method === 'POST'
+    ? {state:'working',jobId:'one',stage:'extracting',elapsedMs:1000}
+    : {state:'working',jobId:'one',stage:'recognizing',elapsedMs:5000});
+  await h.controller.setEnabled(true); await flush();
+  assert.equal(h.changes.at(-1).stage,'extracting');
+  await h.poll();
+  assert.equal(h.changes.at(-1).stage,'recognizing');
+  assert.equal(h.changes.at(-1).elapsedMs,5000);
+  h.controller.destroy();
+});
+
 test("switching off ignores a late result and cancels a late job", async () => {
   let finish;
   const h = harness(() => new Promise(resolve => { finish = resolve; }));

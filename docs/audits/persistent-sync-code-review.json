@@ -1,0 +1,76 @@
+{
+  "status": "complete",
+  "verdict": "Ready to merge",
+  "scope": {
+    "base": "75e15a8060a695247f511d4cae2dd74900afeda4",
+    "branch": "codex/english-subtitle-alignment",
+    "head_sha": "75e15a8060a695247f511d4cae2dd74900afeda4",
+    "pr_url": null,
+    "files_changed": 15,
+    "mode": "local-aligned",
+    "snapshot": "final.diff and final-file-hashes.json",
+    "excluded": [
+      ".codex-remote-attachments",
+      "build",
+      "docs/audits/persistent-sync-verification.md"
+    ]
+  },
+  "intent": "Reuse one persistent Python model across two preparation jobs with serialized recognition, bounded cancellation and safe shutdown. Report progress and recover media only after video frames advance.",
+  "intent_confidence": "explicit",
+  "reviewers": [
+    "correctness",
+    "maintainability",
+    "security",
+    "reliability",
+    "testing",
+    "api-contract",
+    "performance",
+    "julik-frontend-races",
+    "adversarial"
+  ],
+  "findings": [],
+  "actionable_findings": [],
+  "triage_groups": [],
+  "pre_existing_findings": [],
+  "requirements_completeness": null,
+  "learnings": [],
+  "agent_native_gaps": [],
+  "deployment_notes": [],
+  "residual_risks": [],
+  "testing_gaps": [
+    "Add frame-recovery cases for a nonzero initial counter, dropped-only increments, zero video width and counter reset.",
+    "Add a Python segment-iteration failure test proving the recognition lock is released for the next request."
+  ],
+  "coverage": {
+    "independent_reviewers": 9,
+    "failed_reviewers": [],
+    "validator_selected": 3,
+    "validator_batches": 1,
+    "validator_skipped": 0,
+    "resolved_by_caller_and_independently_verified": 3,
+    "first_evidence_backfilled": 0,
+    "malformed_findings": 0,
+    "malformed_returns": 0,
+    "suppressed_by_confidence": {},
+    "mode_aware_demotions": 0,
+    "cross_model": {
+      "status": "not-run",
+      "reason": "Only Codex was available; no installed attested different-provider peer route. No external transfer occurred.",
+      "fallback": "Independent local adversarial review completed."
+    },
+    "project_standards": "No applicable repository criteria files found.",
+    "model_tiering": "Inherited models; followup_task exposes no model selector.",
+    "verification": [
+      "Independent reviewers ran 83 scoped JavaScript tests, 41 frontend tests and 5 Python service tests successfully.",
+      "Independent validator checked all three caller repairs and ran focused tests; final coordinator service suite passed 7/7.",
+      "Caller reported 133/133 JavaScript tests before the final bounded Windows follow-up; that follow-up passed the final 7 service tests. Unchanged Python suite passed 15/15.",
+      "Caller real-process evidence covers model reuse, timing correction, cancellation, successful Windows parent-and-descendant termination, temporary cleanup and browser video visibility.",
+      "Failed Windows tree termination now retains ownership and rejects replacement; final failure/deadline/retry tests passed."
+    ],
+    "resolution": "Shutdown awaiting, bounded termination and release/install handoff coverage are repaired. The additional parent-only Windows fallback concern is also resolved by the independently validated fail-closed follow-up.",
+    "limitations": "Source review only; packaging and final release execution remain caller-owned.",
+    "snapshot": "Final 15-file diff and SHA256 hashes captured after the last production fix; earlier reviewer artifacts preserve historical findings."
+  },
+  "artifact_path": "C:/Users/Mayor/AppData/Local/Temp/compound-engineering-Mayor/ce-code-review/20260913-persistent-speech",
+  "run_id": "20260913-persistent-speech"
+}

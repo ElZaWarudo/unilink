@@ -586,6 +586,7 @@ export function createUnilinkServer({
         if (request.method === "GET") {
           sendJson(response, 200, await speechSetup.status());
         } else if (request.method === "POST") {
+          await subtitleSync.release?.();
           sendJson(response, 202, speechSetup.start());
         } else {
           sendJson(response, 405, { error: "Método no permitido." });
@@ -1064,6 +1065,26 @@ export function createUnilinkServer({
       }
     }
   });
-  server.once("close", () => { subtitleSync.close(); speechSetup.close(); });
+  let cleanup;
+  const closeResources = () => {
+    if (!cleanup) cleanup = Promise.all([
+      Promise.resolve().then(() => subtitleSync.close()),
+      Promise.resolve().then(() => speechSetup.close()),
+    ]).catch(error => { cleanup = null; throw error; });
+    return cleanup;
+  };
+  // Preserve cleanup for ordinary HTTP server users, while shutdown callers can await it.
+  server.once("close", () => { closeResources().catch(() => {}); });
+  let shutdown;
+  server.shutdown = () => {
+    if (!shutdown) shutdown = Promise.all([
+      closeResources(),
+      new Promise((resolveClose, rejectClose) => server.close(error => {
+        if (error && error.code !== "ERR_SERVER_NOT_RUNNING") rejectClose(error);
+        else resolveClose();
+      })),
+    ]).catch(error => { shutdown = null; throw error; });
+    return shutdown;
+  };
   return server;
 }

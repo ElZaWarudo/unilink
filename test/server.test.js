@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -37,7 +37,7 @@ async function fixture(options = {}) {
     baseUrl,
     configStore,
     registry,
-    close: () => new Promise((resolve) => server.close(resolve)),
+    close: () => server.shutdown(),
   };
 }
 
@@ -62,6 +62,80 @@ test("speech installation requires the host configuration token and same origin"
   assert.equal(starts, 1);
   await app.close();
   assert.equal(closes, 1);
+});
+
+test("speech setup waits for worker release and never starts after release failure", async t => {
+  let finishRelease, failRelease, starts = 0, releaseCalls = 0;
+  const app = await fixture({
+    subtitleSync: { close: async () => {}, release: () => {
+      releaseCalls++;
+      return new Promise((resolve, reject) => { finishRelease = resolve; failRelease = reject; });
+    } },
+    speechSetup: {
+      status: async () => ({ state: "idle", busy: false }),
+      start: () => { starts++; return { state: "checking", busy: true }; }, close: () => {},
+    },
+  });
+  t.after(app.close);
+  const html = await (await fetch(`${app.baseUrl}/configure`)).text();
+  const token = html.match(/data-speech-setup data-token="([^"]+)"/)[1];
+  const post = () => fetch(`${app.baseUrl}/api/speech-setup`, {
+    method: "POST", headers: { "x-unilink-token": token },
+  });
+  const waitForRelease = async count => {
+    for (let i = 0; i < 100 && releaseCalls < count; i++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(releaseCalls, count);
+  };
+  const first = post();
+  await waitForRelease(1);
+  assert.equal(starts, 0);
+  finishRelease();
+  assert.equal((await first).status, 202);
+  assert.equal(starts, 1);
+  const second = post();
+  await waitForRelease(2);
+  assert.equal(starts, 1);
+  failRelease(new Error("termination unconfirmed"));
+  assert.equal((await second).status, 500);
+  assert.equal(starts, 1);
+});
+
+test("shutdown waits for temporary resource cleanup after HTTP close and deduplicates callers", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "unilink-shutdown-test-"));
+  let finishCleanup, closes = 0, setupCloses = 0, finished = false;
+  const server = createUnilinkServer({ registry: new StreamRegistry(), configStore: {},
+    subtitleSync: { close: async () => {
+      closes++;
+      await new Promise(resolve => { finishCleanup = resolve; });
+      await rm(directory, { recursive: true, force: true });
+    } },
+    speechSetup: { close: () => { setupCloses++; } },
+  });
+  await listen(server);
+  const httpClosed = new Promise(resolve => server.once("close", resolve));
+  const shutdown = server.shutdown();
+  shutdown.then(() => { finished = true; });
+  assert.equal(server.shutdown(), shutdown);
+  await httpClosed;
+  assert.equal(finished, false);
+  assert.equal(closes, 1);
+  assert.equal(setupCloses, 1);
+  await access(directory);
+  finishCleanup();
+  await shutdown;
+  await assert.rejects(access(directory), { code: "ENOENT" });
+});
+
+test("shutdown cleanup failure is reported and can be explicitly retried", async () => {
+  let attempts = 0;
+  const server = createUnilinkServer({ registry: new StreamRegistry(), configStore: {},
+    subtitleSync: { close: async () => { if (++attempts === 1) throw new Error("termination unconfirmed"); } },
+    speechSetup: { close: () => {} },
+  });
+  await listen(server);
+  await assert.rejects(server.shutdown(), /termination unconfirmed/);
+  await server.shutdown();
+  assert.equal(attempts, 2);
 });
 
 test("configuration reports JSON save results and preserves the previous URL on invalid input", async (t) => {

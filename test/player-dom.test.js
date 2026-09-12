@@ -95,6 +95,17 @@ test("a rejected play request keeps controls visible and a successful retry clea
   assert.equal(h.parts.message.hidden, true); h.hide(); assert.equal(h.root.dataset.controlsState, "hidden");
 });
 
+test("a decoder failure stops continuing audio and identifies the video error", async t => {
+  const h = harness(t);
+  h.video.paused = false;
+  h.video.pause = () => { h.video.paused = true; };
+  h.video.error = {code:3};
+  await h.video.emit('error');
+  assert.equal(h.video.paused,true);
+  assert.match(h.parts.message.textContent,/decodificar.*vídeo/i);
+  assert.equal(h.parts.retry.hidden,false);
+});
+
 test("subtitle retry uses the same URL without restarting media and ignores a superseded track", async t => {
   let attempts = 0; let oldResolve; const signals = [];
   const h = harness(t, { subtitleUrl: "/old.vtt", fetchImpl: async (url, options) => {

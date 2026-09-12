@@ -25,9 +25,49 @@ test("validates bounded correction protocol instead of trusting worker output", 
     { ...result, end: 1000 }, { ...result, residual: NaN }]) assert.equal(validCorrection(invalid, window), false);
 });
 
+test("release waits for service close, deduplicates and blocks new jobs until replacement", async () => {
+  const sync = new SubtitleSync();
+  let finishClose, closes = 0;
+  const oldService = { close: () => { closes++; return new Promise(resolve => { finishClose = resolve; }); } };
+  sync.service = oldService;
+  let released = false;
+  const release = sync.release();
+  release.then(() => { released = true; });
+  assert.equal(sync.release(), release);
+  assert.equal(closes, 1);
+  assert.equal(sync.start(context()).state, "busy");
+  await delay(0);
+  assert.equal(released, false);
+  assert.equal(sync.service, oldService);
+  finishClose();
+  await release;
+  assert.notEqual(sync.service, oldService);
+  await sync.close();
+});
+
+test("close during release prevents recreation and failed release can be retried", async () => {
+  const sync = new SubtitleSync();
+  let finishClose, failClose, closes = 0;
+  const oldService = { close: () => { closes++; return new Promise((resolve, reject) => {
+    finishClose = resolve; failClose = reject;
+  }); } };
+  sync.service = oldService;
+  const release = sync.release();
+  failClose(new Error('termination unconfirmed'));
+  await assert.rejects(release, /termination unconfirmed/);
+  assert.equal(sync.service, oldService);
+  const retry = sync.release();
+  assert.equal(sync.close(), retry);
+  assert.equal(sync.start(context()).state, "unavailable");
+  finishClose();
+  await retry;
+  assert.equal(closes, 2);
+  assert.equal(sync.service, oldService);
+});
+
 test("deduplicates same window, limits concurrency, and caches by source/track", async () => {
   let release, calls = 0;
-  const sync = new SubtitleSync({ run: async () => { calls++; return new Promise(r => { release = r; }); } });
+  const sync = new SubtitleSync({ maxConcurrent: 1, run: async () => { calls++; return new Promise(r => { release = r; }); } });
   const first = sync.start(context());
   assert.equal(sync.start(context()).jobId, first.jobId);
   assert.equal(sync.start(context({ key: "different-audio" })).state, "busy");
@@ -37,6 +77,26 @@ test("deduplicates same window, limits concurrency, and caches by source/track",
   assert.equal(sync.start(context()).jobId, first.jobId);
   assert.equal(calls, 1);
   sync.close();
+});
+
+test("accepts two bounded jobs and reports worker progress without mixing results", async () => {
+  const finishes = [];
+  const sync = new SubtitleSync({ run: (_input, _signal, progress) => {
+    progress('recognizing');
+    return new Promise(resolve => finishes.push(resolve));
+  } });
+  const first = sync.start(context());
+  const second = sync.start(context({key:'second'}));
+  assert.equal(second.state,'working');
+  assert.equal(sync.start(context({key:'third'})).state,'busy');
+  await delay(0);
+  assert.equal(sync.get(first.jobId).stage,'recognizing');
+  finishes[1]({state:'insufficient'});
+  assert.equal((await completed(sync,second.jobId)).state,'insufficient');
+  assert.equal(sync.get(first.jobId).state,'working');
+  finishes[0]({state:'ready',result});
+  assert.equal((await completed(sync,first.jobId)).state,'ready');
+  await sync.close();
 });
 
 test("source changes discard an in-flight result", async () => {
@@ -56,7 +116,7 @@ test("late response cancellation cannot cancel the new seek generation's job", a
   let releaseFirst, finishRecognition, posts = 0, clock = 0, latest;
   const timers = new Map();
   let timerId = 0;
-  const sync = new SubtitleSync({ run: (_, signal) => new Promise((resolve, reject) => {
+  const sync = new SubtitleSync({ maxConcurrent: 1, run: (_, signal) => new Promise((resolve, reject) => {
     finishRecognition = resolve;
     signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
   }) });

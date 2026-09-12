@@ -562,16 +562,7 @@ function layout(
       text-align: center;
       pointer-events: none;
     }
-    .player.has-playback-error video { display: none; }
     .player.has-playback-error .player-caption { display: none; }
-    .player.has-playback-error .player-message {
-      position: relative;
-      inset: auto;
-      width: auto;
-      transform: none;
-      margin: var(--space-3);
-    }
-    .player.has-playback-error .player-controls { position: relative; }
     .player-seek-feedback {
       position: absolute;
       z-index: 3;
@@ -688,7 +679,7 @@ function layout(
       height: 100%;
       border-radius: 0;
     }
-    .player:fullscreen:not(.has-playback-error) .player-surface { height: 100%; }
+    .player:fullscreen .player-surface { height: 100%; }
     .player:fullscreen video {
       width: 100%;
       height: 100%;
