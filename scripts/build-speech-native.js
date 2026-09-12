@@ -132,8 +132,12 @@ if (args.includes('--verify-only')) {
       for (const match of imports.matchAll(/DLL Name:\s*(\S+)/g)) {
         const dependency = match[1];
         if (runtimeNames.test(dependency)) {
-          const location = run('g++.exe', [`-print-file-name=${dependency}`], true);
-          if (location === dependency) throw new Error(`Cannot locate MinGW runtime ${dependency}`);
+          let location = run('g++.exe', [`-print-file-name=${dependency}`], true);
+          if (location === dependency) {
+            const compiler = run('where.exe', ['g++.exe'], true).split(/\r?\n/)[0];
+            location = join(dirname(compiler), dependency);
+            if (!await exists(location)) throw new Error(`Cannot locate MinGW runtime ${dependency}`);
+          }
           await copyFile(location, join(staging, dependency));
           pending.push(dependency);
         } else if (!/^api-ms-win-/i.test(dependency) && !await exists(join(process.env.SystemRoot || 'C:/Windows', 'System32', dependency))) {
