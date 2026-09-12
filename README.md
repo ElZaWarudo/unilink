@@ -22,6 +22,7 @@ need Node.js or a terminal.
 - A stable `/watch` page for phones, tablets, TVs, and other computers.
 - Automatic subtitle discovery through OpenSubtitles v3.
 - Subtitle language, source, and timing preferences persisted between sessions.
+- Optional local speech matching to synchronize English subtitles with English audio.
 - Resume position and touch-friendly playback controls.
 - Optional one-time Stremio account connection with automatic playback-position sync.
 - HTTP Range proxying for seeking.
@@ -79,6 +80,34 @@ Second screen:        http://YOUR-COMPUTER-IP:17891/watch
 
 The torrent starts when the browser requests `/media`. Selecting another result
 in Stremio updates the content served by the same `/watch` address.
+
+## English subtitle synchronization
+
+Install the optional speech engine once on the host computer, from this checkout:
+
+```bash
+npm run setup:subtitle-sync
+```
+
+Setup requires Python 3.10 or newer and downloads the English `base.en` model and
+its Python dependencies. Windows uses Stremio's bundled FFmpeg and FFprobe; on
+Linux install both commands on `PATH`. Custom installations can set
+`UNILINK_FFMPEG`, `UNILINK_FFPROBE`, `UNILINK_SETUP_PYTHON`, and
+`UNILINK_SUBTITLE_SYNC_HOME` (default `~/.unilink/subtitle-sync`).
+
+Select English subtitles and English audio, then enable **Auto-sync inglés** in
+the player. For tracks without language metadata, enable it only when the audio
+is English. Each screen opts in separately. The host analyzes up to two minutes
+of audio around playback and matches spoken phrases with the selected subtitles.
+Audio and recognized words stay on the host; playback does not wait for analysis.
+
+Corrections apply only within sections supported by at least six consistent
+phrase matches. Music, paraphrased subtitles, and uncertain matches can leave a
+section unchanged. The player analyzes later sections as playback advances;
+seeking or changing tracks discards pending work. Manual subtitle delay remains
+additive, and switching auto-sync off restores the original cue timings.
+The first correction can take around a minute on a laptop CPU. This is local
+phrase timing, not a guarantee of frame-accurate alignment across an episode.
 
 ## Tray application
 

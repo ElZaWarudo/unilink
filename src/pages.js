@@ -628,6 +628,9 @@ function layout(
       margin-top: var(--space-2);
     }
     .player-control-row .control-spacer { flex: 1; }
+    .player-sync-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 8px; }
+    .player-sync-row [role="status"] { flex: 1 1 170px; min-width: 0; font-size: 12px; line-height: 1.4; color: var(--quiet); }
+    .player-sync-row button { font-size: 12px; }
     .player-controls button {
       min-width: 44px;
       min-height: 40px;
@@ -1367,6 +1370,7 @@ export function watchPage({
        data-status-url="/api/status"
        data-hls-url="/hls/${escapeHtml(serverInstanceId)}/${escapeHtml(active.version)}/master.m3u8"
        data-subtitle-url="${escapeHtml(subtitleUrl)}"
+       data-subtitle-language="${escapeHtml(selectedSubtitle?.language || "")}"
        data-subtitle-delay="${escapeHtml(subtitleDelay)}"
        data-resume-key="${escapeHtml(resumeKey)}"
        data-progress-token="${escapeHtml(progressToken)}"
@@ -1404,6 +1408,11 @@ export function watchPage({
              ${selectedSubtitle ? "disabled" : 'disabled title="Subtítulos no disponibles"'}>CC</button>
            <button data-player-control="fullscreen" type="button"
              aria-label="Pantalla completa" title="Pantalla completa (F)">⛶</button>
+         </div>
+         <div class="player-sync-row">
+           <button data-player-control="subtitle-sync" type="button" aria-pressed="false"
+             aria-describedby="subtitleSyncStatus" disabled>Auto-sync inglés</button>
+           <span id="subtitleSyncStatus" data-player-part="subtitle-sync-status" role="status" aria-live="polite">Requiere subtítulos y audio en inglés</span>
          </div>
        </div>
        </div>

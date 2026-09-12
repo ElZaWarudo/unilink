@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { HLS_RESOURCE, proxyHls } from "./hls.js";
 import { StremioSync } from "./stremio-sync.js";
 import { handleStremioRequest, sameOriginRequest } from "./stremio-routes.js";
+import { SubtitleSync } from "./subtitle-sync.js";
 
 import {
   normalizeTorrentioManifestUrl,
@@ -498,6 +499,7 @@ function playerStatus(registry, serverInstanceId, watchUrl) {
     subtitleId:
       registry.active?.playbackSettings?.subtitleId ?? "",
     subtitleUrl,
+    subtitleLanguage: subtitleSelection(registry.active).subtitle?.language ?? "",
     name:
       registry.active?.unilinkEpisode?.title ??
       registry.active?.description ??
@@ -518,6 +520,7 @@ export function createUnilinkServer({
   subtitlesManifestUrl = DEFAULT_SUBTITLES_MANIFEST_URL,
   metadataManifestUrl = DEFAULT_METADATA_MANIFEST_URL,
   fetchImpl = fetch,
+  subtitleSync = new SubtitleSync(),
 }) {
   const serverInstanceId = randomUUID();
   const adminToken = randomUUID();
@@ -528,7 +531,7 @@ export function createUnilinkServer({
     applyCommonHeaders(response);
     const url = new URL(request.url, "http://unilink.local");
     const pathname = url.pathname;
-    if (["/watch", "/configure", "/api/progress"].includes(pathname) || pathname.startsWith("/api/stremio/")) {
+    if (["/watch", "/configure", "/api/progress", "/api/subtitle-sync"].includes(pathname) || pathname.startsWith("/api/stremio/")) {
       response.removeHeader("Access-Control-Allow-Origin");
       response.setHeader("Referrer-Policy", "no-referrer");
       response.setHeader("X-Frame-Options", "DENY");
@@ -555,6 +558,79 @@ export function createUnilinkServer({
       if (await handleStremioRequest({ request, response, pathname: url.pathname,
         sync: stremioSync, registry, serverInstanceId, adminToken, progressToken,
         loopback: isLoopback(request.socket.remoteAddress) })) return;
+      if (pathname === "/api/subtitle-sync") {
+        if (request.headers["x-unilink-token"] !== progressToken) {
+          sendJson(response, 403, { state: "error" });
+          return;
+        }
+        const jobId = url.searchParams.get("job");
+        if (request.method === "GET") {
+          sendJson(response, 200, jobId ? subtitleSync.get(jobId) : { available: await subtitleSync.available() });
+          return;
+        }
+        if (request.method === "DELETE" && jobId) {
+          sendJson(response, 200, subtitleSync.cancel(jobId));
+          return;
+        }
+        if (request.method !== "POST") { sendJson(response, 405, { state: "error" }); return; }
+        let raw = "";
+        for await (const chunk of request) {
+          raw += chunk;
+          if (Buffer.byteLength(raw) > 2048) { sendJson(response, 413, { state: "error" }); return; }
+        }
+        let body;
+        try { body = JSON.parse(raw); } catch { sendJson(response, 400, { state: "error" }); return; }
+        if (!body || !Number.isFinite(body.time) || !Number.isFinite(body.duration) || body.duration < 30 ||
+            body.duration > 28800 || body.time < 0 || body.time >= body.duration ||
+              !Number.isInteger(body.audioIndex) || body.audioIndex < 0 || body.audioIndex > 15 ||
+              (body.requestId !== undefined && (typeof body.requestId !== "string" || body.requestId.length > 100))) {
+          sendJson(response, 400, { state: "error" }); return;
+        }
+        const active = registry.active;
+        const selected = subtitleSelection(active);
+        const selectionIdentity = JSON.stringify([selected.subtitle?.id, selected.subtitle?.url, selected.subtitle?.language]);
+          const isCurrent = () => {
+            const currentSelection = subtitleSelection(registry.active);
+            return Boolean(active && registry.active === active && body.version === active.version &&
+              body.serverInstanceId === serverInstanceId && body.subtitleUrl === currentSelection.url &&
+              selectionIdentity === JSON.stringify([currentSelection.subtitle?.id,
+                currentSelection.subtitle?.url, currentSelection.subtitle?.language]));
+          };
+        if (!isCurrent()) { sendJson(response, 409, { state: "stale" }); return; }
+        if (selected.subtitle?.language !== "en") { sendJson(response, 422, { state: "insufficient", reason: "english_only" }); return; }
+        if (!await subtitleSync.available()) { sendJson(response, 503, { state: "unavailable" }); return; }
+        const start = Math.max(0, Math.min(Math.floor(body.time / 60) * 60 - 20, body.duration - 30));
+        const window = { start, duration: Math.min(120, body.duration - start) };
+        const local = `http://127.0.0.1:${server.address().port}`;
+        const mediaUrl = `${local}/media?instance=${serverInstanceId}&version=${active.version}`;
+        const result = subtitleSync.start({
+          key: JSON.stringify([serverInstanceId, active.version, selectionIdentity, body.audioIndex, start]),
+            isCurrent, window, requestId: body.requestId,
+          prepare: async signal => {
+            const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(30000)]);
+            const master = await fetch(`${local}/hls/${serverInstanceId}/${active.version}/master.m3u8`, { signal: requestSignal });
+            if (!master.ok) throw new Error("audio unavailable");
+            const playlist = await master.text();
+            const audioLines = playlist.split(/\r?\n/).filter(line => /^#EXT-X-MEDIA:TYPE=AUDIO,/.test(line));
+            const audioMatch = audioLines[body.audioIndex]?.match(/URI="[^"]*\/audio(\d+)\.m3u8"/);
+            if (!audioMatch) throw new Error("audio track unavailable");
+            const subtitle = await fetchImpl(subtitleConversionUrl(selected.subtitle.url, stremioServerUrl), { signal: requestSignal });
+            if (!subtitle.ok) throw new Error("subtitles unavailable");
+            let subtitles = "";
+            const decoder = new TextDecoder();
+            let size = 0;
+            for await (const chunk of subtitle.body) {
+              size += chunk.byteLength;
+              if (size > 2000000) throw new Error("subtitles too large");
+              subtitles += decoder.decode(chunk, { stream: true });
+            }
+            subtitles += decoder.decode();
+            return { mediaUrl, audioIndex: Number(audioMatch[1]), subtitles };
+          },
+        });
+        sendJson(response, result.state === "working" ? 202 : 200, result);
+        return;
+      }
       if (url.pathname === "/manifest.json" && request.method === "GET") {
         sendJson(response, 200, MANIFEST);
         return;
@@ -930,5 +1006,6 @@ export function createUnilinkServer({
       }
     }
   });
+  server.once("close", () => subtitleSync.close());
   return server;
 }

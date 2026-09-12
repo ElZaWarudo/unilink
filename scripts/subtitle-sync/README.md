@@ -1,6 +1,9 @@
 # English subtitle alignment experiment
 
-This is a local diagnostic tool, not an automatic-sync feature in the player.
+This directory contains the original local diagnostic tool. The player now has
+an optional scene-local implementation in `src/speech` and `src/subtitle-sync.js`;
+see the root README for setup. The experiment below remains useful for comparing
+whole-episode offset/rate hypotheses with the conservative local approach.
 It reads the active Unilink source, extracts three short audio samples, recognizes
 English speech locally, and matches unique four-word subtitle prefixes to word
 timestamps. It estimates a constant offset or a linear timing-rate correction.
@@ -82,6 +85,17 @@ The deterministic tests cover parsing, unique matches, repeated phrases, missing
 cue starts, unrelated speech, offsets, drift, outliers and edit jumps.
 
 ## Measured result — 2026-09-12
+
+The subsequent integrated scene-local worker was exercised through the actual
+player at 08:36. Its two-minute sample produced 21 anchors and a +1.44-second
+offset, with a median ASR-anchor residual of 0.1645 seconds. Supported subtitle
+times were 460.877–578.526 seconds. The browser displayed “Tramo sincronizado”;
+switching off restored original timings. Desktop and 390-pixel-wide phone layout
+checks passed. This validates one ordinary-dialogue section, not all content.
+
+The implementation checks include 89 JavaScript tests and 10 Python tests,
+including seek cancellation, delayed responses, evicted-window recovery,
+language/source changes, weak matches, and bounded corrections.
 
 Tested against the active 45-minute episode on a Ryzen 5 5500U, using Python 3.13,
 faster-whisper 1.2.1 and CTranslate2 4.8.2. Audio and source subtitles remained
