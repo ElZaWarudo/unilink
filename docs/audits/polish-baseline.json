@@ -1,0 +1,1181 @@
+{
+  "context": {
+    "cognitive_load_requested": false,
+    "workload_comparison_required": false
+  },
+  "evaluators": [
+    {
+      "evaluator": "01 - Scope and focus",
+      "dimension": "Scope and focus",
+      "rating": 2,
+      "confidence": "medium",
+      "coverage": {
+        "flows": [
+          "FLOW-01",
+          "FLOW-02",
+          "FLOW-03",
+          "FLOW-04",
+          "FLOW-05",
+          "FLOW-06",
+          "FLOW-07",
+          "FLOW-08"
+        ],
+        "surfaces": [
+          "SURF-01",
+          "SURF-02",
+          "SURF-03",
+          "SURF-04",
+          "SURF-05",
+          "SURF-06",
+          "SURF-07",
+          "SURF-08",
+          "SURF-09"
+        ],
+        "platforms": [
+          "PLAT-01",
+          "PLAT-02",
+          "PLAT-03",
+          "PLAT-04",
+          "PLAT-05"
+        ],
+        "gaps": [
+          "No independent runtime walkthrough; shared Windows Chromium evidence accepted.",
+          "Linux and native tray/install behavior reviewed through atlas/source only.",
+          "Final release audience and optional engine onboarding intent remain unconfirmed."
+        ]
+      },
+      "findings": [
+        {
+          "id": "POL-01-01",
+          "severity": "P2",
+          "title": "Configuration stops at add-on installation instead of completing the second-screen journey",
+          "evidence_type": "code",
+          "evidence": "README.md:3 defines the job as continuing playback on another LAN device. src/pages.js:893 limits the saved message to installing/updating the add-on; src/pages.js:898-927 renders the manifest form, installation link, account connection, and local manifest endpoint, without a watch destination or instructions for the next viewing step. The shared layout at src/pages.js:868-871 provides no navigation. docs/product/polish-evidence.md confirms the empty configuration screen has no visible route to the waiting player. The activation screen does provide a handoff URL at src/pages.js:1183-1193, but users must first discover how to reach that later screen.",
+          "user_effect": "A first-time host can save and install the source but must reconstruct the remaining Stremio-to-browser steps from external documentation or discover the tray menu, while the next visible section shifts attention to account linking.",
+          "correction": "Add a compact next-step block on configuration, especially after a successful save: select a Unilink result in Stremio, then open or copy the LAN second-screen address. Supply the existing server-derived watch URL and keep account linking explicitly optional.",
+          "verify": "Starting from an empty temporary profile, save a valid source and verify the rendered page explains selecting a Unilink result and exposes the correct LAN watch address with an open/copy action. Follow the address to waiting, activate a fixture source, and verify that the same address becomes the player.",
+          "affected": [
+            "FLOW-01",
+            "FLOW-02",
+            "SURF-02",
+            "ACT-01",
+            "PLAT-01",
+            "PLAT-02",
+            "PLAT-03"
+          ],
+          "frequency": "occasional",
+          "effort": "S",
+          "cognitive_load": {
+            "factors": [
+              "M",
+              "S",
+              "I",
+              "U"
+            ],
+            "profile": "ACT-01 first-time host operator",
+            "rationale": "The host must retain the external setup sequence, search outside configuration for the viewer address, connect installation with the later handoff screen, and infer whether account linking is necessary before watching. No measured workload claim is made.",
+            "claim_basis": "heuristic",
+            "profile_sensitivity": "unknown",
+            "court_referral": "no"
+          }
+        }
+      ],
+      "keep": [
+        "Preserve the focused tray-plus-browser product and trusted-LAN scope rather than adding a catalog or unrelated destinations.",
+        "Activation puts the stable second-screen URL and open/copy actions ahead of subtitle tuning (src/pages.js:1180-1203).",
+        "Keep speech matching opt-in and scene-local, with playback continuing when no trustworthy correction exists.",
+        "Keep queue controls within episodic playback and account connection separate from the required provider configuration."
+      ],
+      "unknowns": [
+        "Fresh-install distribution audience is unconfirmed; obtain the target platform/release channel before judging installer scope.",
+        "Confirm whether optional speech-engine installation must be achievable from the packaged app without a developer checkout; current README.md:86-95 documents the checkout command."
+      ],
+      "cross_refs": [
+        "Content and language: src/pages.js:899 and :1321 tell users to choose Servir en red, while src/streams.js:361 actually names entries Unilink. Correct the action-identifying term consistently.",
+        "Completeness and seams: src/player.js:635 says Activa el motor local en el PC without an actionable installation path; README.md:86-95 requires npm setup from a checkout despite the normal desktop promise at README.md:9-10. Resolve the intended optional-feature packaging/onboarding scope before expanding implementation."
+      ]
+    },
+    {
+      "evaluator": "02 - Behavioral consistency",
+      "dimension": "Behavioral consistency",
+      "rating": 2,
+      "confidence": "medium",
+      "coverage": {
+        "flows": [
+          "FLOW-01",
+          "FLOW-02",
+          "FLOW-03",
+          "FLOW-04",
+          "FLOW-05",
+          "FLOW-06",
+          "FLOW-07",
+          "FLOW-08"
+        ],
+        "surfaces": [
+          "SURF-01",
+          "SURF-02",
+          "SURF-03",
+          "SURF-04",
+          "SURF-05",
+          "SURF-06",
+          "SURF-07",
+          "SURF-08"
+        ],
+        "platforms": [
+          "PLAT-01",
+          "PLAT-02",
+          "PLAT-03"
+        ],
+        "gaps": [
+          "No independent runtime operation; shared packet provides Windows browser observations only.",
+          "Linux/native tray conventions and actual Stremio source-list rendering remain unverified."
+        ]
+      },
+      "findings": [
+        {
+          "id": "POL-02-01",
+          "severity": "P2",
+          "title": "The instructed source name does not match the source name Unilink emits",
+          "evidence_type": "code",
+          "evidence": "src/pages.js:899 describes adding an action named Servir en red, and src/pages.js:1321 tells waiting viewers to choose a source marked Servir en red. src/streams.js:361 instead emits the source name Unilink followed by quality. The shared evidence packet also observes Servir en red in the waiting screen; actual Stremio rendering has not been independently reproduced.",
+          "user_effect": "The first-use handoff asks users to search for a label that is absent from the application's emitted source name, forcing them to infer that Unilink is the intended result.",
+          "correction": "Use the emitted Unilink source label consistently in configuration and waiting instructions, with wording such as Elige una fuente cuyo nombre empiece por Unilink.",
+          "verify": "Compare a decorated stream response with configuration and waiting-page copy; all instructions identify its literal Unilink prefix. Confirm one source-list sample in Stremio before release.",
+          "affected": [
+            "FLOW-01",
+            "FLOW-02",
+            "SURF-02",
+            "SURF-04",
+            "SURF-08",
+            "ACT-01",
+            "PLAT-03"
+          ],
+          "frequency": "occasional",
+          "effort": "S",
+          "cognitive_load": {
+            "factors": [
+              "S",
+              "I",
+              "U"
+            ],
+            "profile": "ACT-01 first-time host operator",
+            "rationale": "During the initial Stremio handoff the operator must reconcile the requested Servir en red label with emitted Unilink results; the code-supported naming mismatch creates avoidable search and interpretation.",
+            "claim_basis": "heuristic",
+            "profile_sensitivity": "none",
+            "court_referral": "no"
+          }
+        },
+        {
+          "id": "POL-02-02",
+          "severity": "P2",
+          "title": "Activating sound after lowering volume to zero leaves the player silent",
+          "evidence_type": "code",
+          "evidence": "src/player.js:1360-1364 sets video.volume from the slider and video.muted=true when volume is zero. The mute click handler at src/player.js:1355-1358 only toggles video.muted. updateVolume at src/player.js:1074-1082 displays MUDO for either muted or zero volume but derives its Activar sonido/Silenciar accessible name only from muted. Thus lowering volume to zero then pressing Activar sonido leaves volume zero, displays MUDO, and relabels the action Silenciar.",
+          "user_effect": "The same sound activation control works after ordinary mute but fails after the slider reaches zero; its visible and accessible states then disagree, requiring an additional volume adjustment to hear playback.",
+          "correction": "Treat effective silence consistently. When activating sound with volume zero, restore the last nonzero volume or a documented default, and derive the label and visible state from the same effective-silence predicate.",
+          "verify": "In the player, set volume to a nonzero value, lower it to zero, activate sound, and verify nonzero volume, muted=false, and consistent visible/accessibility labels. Verify ordinary mute/unmute retains the prior nonzero volume.",
+          "affected": [
+            "FLOW-03",
+            "SURF-05",
+            "ACT-02",
+            "PLAT-03"
+          ],
+          "frequency": "occasional",
+          "effort": "S",
+          "cognitive_load": {
+            "factors": [
+              "U",
+              "R"
+            ],
+            "profile": "ACT-02 LAN viewer adjusting playback sound",
+            "rationale": "The viewer must diagnose why Activar sonido remains silent and recover using a different control after the zero-volume sequence demonstrated by the player handlers.",
+            "claim_basis": "heuristic",
+            "profile_sensitivity": "none",
+            "court_referral": "no"
+          }
+        }
+      ],
+      "keep": [
+        "Subtitle settings explicitly require Aplicar subtítulos, while playback-local controls act immediately; the distinction corresponds to shared host preferences versus current-screen playback.",
+        "Play/pause updates visible icon, accessible name, and shortcut title together.",
+        "Queue actions use the same action identifiers and episode-specific accessible names in initial markup and dynamic rendering.",
+        "Auto-sync cancellation and generation guards protect the same source/track identity across user actions."
+      ],
+      "unknowns": [
+        "Reproduce zero-volume then sound activation in the shared browser to supplement deterministic code evidence.",
+        "Check source-name instructions against one real Stremio source-list rendering.",
+        "Compare Windows and Linux native tray lifecycle behavior on actual platforms before claiming cross-platform behavioral consistency."
+      ],
+      "cross_refs": [
+        "Content and language: POL-02-01 has the same source-name terminology cause; consolidate rather than duplicate.",
+        "Built-in accessibility: POL-02-02 includes a visible/accessibility sound-state disagreement; consolidate under the shared effective-silence behavior.",
+        "Platform conventions/status: shared packet observes player controls hiding even while paused; pause handler does not explicitly reveal controls. Treat primary diagnosis in those dimensions."
+      ]
+    },
+    {
+      "evaluator": "03 - Status and feedback",
+      "dimension": "Status and feedback",
+      "rating": 2,
+      "confidence": "medium",
+      "coverage": {
+        "flows": [
+          "FLOW-01",
+          "FLOW-02",
+          "FLOW-03",
+          "FLOW-04",
+          "FLOW-05",
+          "FLOW-06",
+          "FLOW-07",
+          "FLOW-08"
+        ],
+        "surfaces": [
+          "SURF-01",
+          "SURF-02",
+          "SURF-03",
+          "SURF-04",
+          "SURF-05",
+          "SURF-06",
+          "SURF-07",
+          "SURF-09"
+        ],
+        "platforms": [
+          "PLAT-01",
+          "PLAT-02",
+          "PLAT-03",
+          "PLAT-04",
+          "PLAT-05"
+        ],
+        "gaps": [
+          "No independent browser operations; runtime observations are lead-provided.",
+          "Native tray failure feedback not reproduced on Windows or Linux.",
+          "Live Stremio account writes and assistive-technology announcements not exercised."
+        ]
+      },
+      "findings": [
+        {
+          "id": "POL-03-01",
+          "severity": "P2",
+          "title": "Progress status claims a local save before storage succeeds and mislabels unrelated failures as pending Stremio writes",
+          "evidence_type": "code",
+          "evidence": "src/pages.js:1363 renders 'Progreso guardado en este navegador' immediately. src/player.js:999-1005 only attempts the localStorage write later and records failure in data-resume-state without updating that visible claim. src/player.js:597-599 maps every state except synced/disconnected to an automatic Stremio retry claim; createProgressReporter at lines 15-19 converts all non-2xx failures to error. src/stremio-sync.js:95-101 returns invalid for unsupported content identities before checking account connection at line 114, so such content shows a cloud retry message even without a linked account. The packet's pending-on-clean-profile observation is consistent with this path but its exact trigger remains unverified.",
+          "user_effect": "Viewers cannot reliably tell whether their position will survive closing the browser or whether any Stremio save is actually possible; the interface can assure preservation after storage has failed.",
+          "correction": "Drive local-save feedback from the actual storage outcome. Distinguish disconnected, unsupported/invalid progress, pending, synced, and transport failures, and preserve the local-save outcome when reporting a cloud failure.",
+          "verify": "With localStorage throwing, play and pause and confirm no saved-local claim appears. With unsupported content and no linked account, confirm no pending-cloud or automatic-retry promise appears. With successful local and cloud writes, verify each success is reported only after its corresponding operation succeeds.",
+          "affected": [
+            "FLOW-03",
+            "FLOW-07",
+            "SURF-05",
+            "ACT-02",
+            "PLAT-03"
+          ],
+          "frequency": "occasional",
+          "effort": "S",
+          "cognitive_load": {
+            "factors": [
+              "I",
+              "U",
+              "R"
+            ],
+            "profile": "ACT-02 trusted LAN viewer",
+            "rationale": "The viewer must reconcile browser storage and optional account state while deciding whether it is safe to leave playback; the code presents a saved claim even when storage fails and a cloud retry claim for unsupported reports.",
+            "claim_basis": "heuristic",
+            "profile_sensitivity": "none",
+            "court_referral": "no"
+          }
+        },
+        {
+          "id": "POL-03-02",
+          "severity": "P2",
+          "title": "Queue edits silently ignore further clicks while the request is pending",
+          "evidence_type": "code",
+          "evidence": "src/player.js:903 rejects all queue actions while marathonBusy. At line 915, move/remove/autoplay actions set marathonBusy=true, then await postForm at lines 921-933 without rerendering, disabling the clicked control, setting aria-busy, or showing a pending message. renderMarathon only reflects busy in controls when invoked (lines 738-742), and this handler invokes it after the await at lines 936-940. Unlike advanceMarathon (lines 848-852), queue edits have no immediate visible acknowledgement.",
+          "user_effect": "On a slow host or network, a viewer sees an apparently actionable unchanged queue and may repeat a click or try another edit; those inputs are discarded without explanation.",
+          "correction": "Immediately mark the affected queue action pending and disable queue mutation controls while the request is in flight; restore them and announce the final update or existing failure message when it settles.",
+          "verify": "Delay each queue move, remove, and autoplay response by three seconds. Verify an immediate pending signal beside the queue, disabled mutation controls throughout the request, no silent actionable controls, and restoration on both success and failure.",
+          "affected": [
+            "FLOW-06",
+            "SURF-06",
+            "ACT-02",
+            "PLAT-03"
+          ],
+          "frequency": "occasional",
+          "effort": "S",
+          "cognitive_load": {
+            "factors": [
+              "U",
+              "R"
+            ],
+            "profile": "ACT-02 trusted LAN viewer",
+            "rationale": "During a queued edit the viewer has no evidence the first click was accepted, while further queue clicks are ignored by the busy guard; this invites uncertainty and repeated work.",
+            "claim_basis": "heuristic",
+            "profile_sensitivity": "none",
+            "court_referral": "no"
+          }
+        },
+        {
+          "id": "POL-03-03",
+          "severity": "P2",
+          "title": "Tray start and restart failures lose their reason outside an invisible stderr log",
+          "evidence_type": "code",
+          "evidence": "src-tauri/src/lib.rs:282-287 and 295-302 handle start/restart failure only with eprintln before refreshing the menu. apply_menu_state at lines 209-213 exposes only 'Servidor activo' or 'Servidor detenido'. A failed requested start therefore returns the same stopped state with no visible failure cause or recovery guidance in this windowless tray application.",
+          "user_effect": "The host operator cannot distinguish a rejected start from an unprocessed click or a deliberately stopped server and has no visible clue for recovery.",
+          "correction": "Retain a sanitized last lifecycle error and expose an actionable failed-start status through the tray or a small host diagnostic surface, with a retry action and guidance matched to the failure.",
+          "verify": "In an isolated native build, inject a sidecar spawn failure and a readiness failure. After Start and Restart, verify a visible failure acknowledgement and usable recovery action without a terminal, and clear the failure after successful recovery.",
+          "affected": [
+            "FLOW-08",
+            "SURF-01",
+            "ACT-01",
+            "PLAT-01",
+            "PLAT-02"
+          ],
+          "frequency": "rare",
+          "effort": "M",
+          "cognitive_load": {
+            "factors": [
+              "U",
+              "R"
+            ],
+            "profile": "ACT-01 host operator",
+            "rationale": "The host initiating server startup sees only the generic stopped label after an exception; diagnosing and retrying requires reconstructing a failure whose reason is available only on stderr.",
+            "claim_basis": "heuristic",
+            "profile_sensitivity": "none",
+            "court_referral": "no"
+          }
+        }
+      ],
+      "keep": [
+        "Subtitle settings acknowledge Applying, disable submit, and report the outcome beside the form.",
+        "Speech sync distinguishes working, uncertain, unavailable and failed results while preserving playback and original timing.",
+        "Episode advance has an explicit preparing message and disables its advance action.",
+        "Account connection exposes pending approval, cancellation, expiry and retry states.",
+        "Transient status polling failures do not interrupt otherwise working media playback."
+      ],
+      "unknowns": [
+        "Confirm the precise reason for pending Stremio status in the clean mirrored profile; unsupported identity is a proven code path but not yet attributed to that observation.",
+        "Native installation and tray error visibility require an isolated executable probe.",
+        "Status announcement timing and repetition with a real screen reader remain unverified."
+      ],
+      "cross_refs": [
+        "Non-ideal states: src/player.js:1202-1212 disables captions after load failure with only Error de subtítulos; retry of the unchanged subtitle URL is not exposed.",
+        "Completeness and seams: optional speech setup requires a developer checkout according to the evidence packet; this is primarily feature onboarding rather than status feedback."
+      ]
+    },
+    {
+      "evaluator": "04 - Non-ideal states",
+      "dimension": "Non-ideal states",
+      "rating": 2,
+      "confidence": "medium",
+      "coverage": {
+        "flows": [
+          "FLOW-01",
+          "FLOW-02",
+          "FLOW-03",
+          "FLOW-04",
+          "FLOW-05",
+          "FLOW-06",
+          "FLOW-07",
+          "FLOW-08"
+        ],
+        "surfaces": [
+          "SURF-01",
+          "SURF-02",
+          "SURF-03",
+          "SURF-04",
+          "SURF-05",
+          "SURF-06",
+          "SURF-07",
+          "SURF-09"
+        ],
+        "platforms": [
+          "PLAT-01",
+          "PLAT-02",
+          "PLAT-03",
+          "PLAT-05"
+        ],
+        "gaps": [
+          "Read-only code evaluation; no independent runtime fault injection.",
+          "Native Linux/Windows tray error visibility and clean installer behavior unverified.",
+          "Long-content, slow-network, and assistive-technology matrix not reproduced."
+        ]
+      },
+      "findings": [
+        {
+          "id": "POL-04-01",
+          "severity": "P2",
+          "title": "A transient subtitle failure leaves captions disabled for the session",
+          "evidence_type": "code",
+          "evidence": "src/player.js:1184 fetches the subtitle once; catch at 1202–1213 disables the captions button and shows 'Error de subtítulos'. pollStatus at 1243 only reloads captions when the URL changes. The playback retry at 1453 is exposed for media failures, not this failure. A successful later response from the unchanged subtitle URL therefore has no caption-specific retry path.",
+          "user_effect": "A viewer who needs captions cannot recover from a temporary conversion/network failure using the disabled CC control; they must infer that reloading the whole player or changing the host subtitle selection may help.",
+          "correction": "Show an explicit subtitle retry action next to the error and retry the current URL without reloading playback; retain the failure message until the new fetch succeeds and disable the action while pending.",
+          "verify": "Make the first subtitle response fail and the next return valid VTT. Verify a visible retry loads captions at the current playback position without replacing the media, then restores the CC toggle.",
+          "affected": [
+            "FLOW-04",
+            "SURF-05",
+            "ACT-02",
+            "PLAT-03"
+          ],
+          "frequency": "occasional",
+          "effort": "S",
+          "cognitive_load": {
+            "factors": [
+              "U",
+              "R"
+            ],
+            "profile": "ACT-02 trusted LAN viewer",
+            "rationale": "The subtitle error identifies failure but supplies no action, requiring viewers to diagnose and reconstruct the caption-loading flow themselves.",
+            "claim_basis": "heuristic",
+            "profile_sensitivity": "none",
+            "court_referral": "no"
+          }
+        },
+        {
+          "id": "POL-04-02",
+          "severity": "P2",
+          "title": "Tray server failures discard the cause and offer only another start attempt",
+          "evidence_type": "code",
+          "evidence": "src-tauri/src/lib.rs:153–168 consumes sidecar events but only handles Terminated, discarding stderr/error output. At 209–213 the tray says only 'Servidor detenido'. Start/restart failures at 283–285 and 298–300 go solely to eprintln. A sidecar that exits because its port is occupied or configuration fails exposes no actionable cause in the tray.",
+          "user_effect": "The host operator sees the same stopped state as an intentional stop and can repeatedly choose Start without knowing what needs to change before viewing can work.",
+          "correction": "Capture a bounded sanitized last startup/sidecar failure, distinguish failed from deliberately stopped state, and provide a tray action opening a local error explanation with a retry and applicable next step. Clear the failure after verified readiness.",
+          "verify": "On an isolated profile, occupy the configured port with a non-Unilink service and attempt startup. Verify a visible failure explanation identifies the port conflict; release it, retry, and verify the failure clears after health succeeds. Also verify intentional Stop remains a normal stopped state.",
+          "affected": [
+            "FLOW-08",
+            "SURF-01",
+            "ACT-01",
+            "PLAT-01",
+            "PLAT-02"
+          ],
+          "frequency": "occasional",
+          "effort": "M",
+          "cognitive_load": {
+            "factors": [
+              "U",
+              "R"
+            ],
+            "profile": "ACT-01 host operator",
+            "rationale": "The same tray label for deliberate stop and failed startup conceals causality and makes the operator repeat an ineffective action or seek external logs.",
+            "claim_basis": "heuristic",
+            "profile_sensitivity": "none",
+            "court_referral": "no"
+          }
+        }
+      ],
+      "keep": [
+        "Playback errors already expose a concrete retry and Stremio recovery hint; HLS attempts bounded automatic recovery.",
+        "Subtitle alignment conservatively retains original timing on insufficient evidence and cancels stale context.",
+        "Subtitle selection generation guards prevent outdated fetches replacing newer selections.",
+        "Configuration errors retain the entered manifest; failed queue changes restore the visible queue.",
+        "Storage failures do not block playback; transient status polling failures do not interrupt active media."
+      ],
+      "unknowns": [
+        "Inject sustained status-server outage during paused and playing states to determine whether a quiet reconnect indication is useful without interrupting valid buffered playback.",
+        "Verify native-HLS audio preparation on a slow or never-completing audio.json request; the source fetch has cancellation but no explicit timeout.",
+        "Test speech-engine unavailable/reinstalled recovery from the actual packaged application."
+      ],
+      "cross_refs": [
+        "Completeness/seams: optional speech setup depends on a developer checkout (shared packet); packaged onboarding ownership should be resolved there.",
+        "Status/feedback: shared packet reports pending account progress on an unlinked profile; investigate independently before attributing.",
+        "Content/language: waiting-screen source name differs from emitted Unilink name in shared packet."
+      ]
+    },
+    {
+      "evaluator": "05 — User Protection",
+      "dimension": "User Protection",
+      "rating": 2,
+      "confidence": "medium",
+      "coverage": {
+        "flows": [
+          "FLOW-01",
+          "FLOW-04",
+          "FLOW-05",
+          "FLOW-06",
+          "FLOW-07"
+        ],
+        "surfaces": [
+          "SURF-02",
+          "SURF-03",
+          "SURF-05",
+          "SURF-06",
+          "SURF-09"
+        ],
+        "platforms": [
+          "PLAT-01",
+          "PLAT-03",
+          "PLAT-04"
+        ],
+        "gaps": [
+          "No independent browser interaction in this evaluator pass.",
+          "Native stop/restart and installation recovery not exercised.",
+          "Live Stremio account consequences deliberately not exercised."
+        ]
+      },
+      "findings": [
+        {
+          "id": "POL-05-01",
+          "severity": "P2",
+          "title": "An old activation tab can apply subtitle settings to a different active source",
+          "evidence_type": "code",
+          "evidence": "src/pages.js:1053 renders the /settings form with language, subtitle ID and delay but no source version or identity. src/server.js:832 calls registry.setPlaybackSettings directly. src/streams.js:262 applies these values to whichever source is currently active, falling back to that source's tracks for an obsolete subtitle ID. Thus after activating another episode, submitting the old tab changes the new episode's delay and saves it as the preference. Unlike advanceMarathon at src/streams.js:137, this mutation has no stale-context rejection.",
+          "user_effect": "A host tuning the episode named in an older tab can unexpectedly shift captions for current viewers and persist the wrong delay.",
+          "correction": "Include active source version in the settings form and reject mismatched submissions before mutation or persistence. Preserve the entered controls and explain that the active source changed with a route to its settings.",
+          "verify": "Open settings for source A, activate B, submit A's form, and assert a stale-context response, unchanged B settings and unchanged saved preferences. A current form must still apply normally.",
+          "affected": [
+            "FLOW-04",
+            "SURF-03",
+            "SURF-09",
+            "ACT-01",
+            "PLAT-03"
+          ],
+          "frequency": "occasional",
+          "effort": "S",
+          "cognitive_load": {
+            "factors": [
+              "M",
+              "R"
+            ],
+            "profile": "Host operator with multiple activation tabs",
+            "rationale": "The form lacks source context validation, so the host must remember which tab is current and reconstruct the new episode's correct timing after submitting an old one.",
+            "claim_basis": "heuristic",
+            "profile_sensitivity": "none",
+            "court_referral": "no"
+          }
+        },
+        {
+          "id": "POL-05-02",
+          "severity": "P2",
+          "title": "Accidental queue removal has no in-player recovery",
+          "evidence_type": "code",
+          "evidence": "src/player.js:931 immediately posts the Quitar action; src/streams.js:115 permanently filters the item from the in-memory queue, and src/server.js:917 refills from later pending episodes. src/pages.js:1233 exposes removal beside reorder controls but no undo or add-back action. test/server.test.js:663 verifies successful removal/refill, without a restore path.",
+          "user_effect": "A mistaken tap skips a prepared episode and forces the viewer to return to Stremio and reconstruct the intended sequence rather than correcting the mistake in the queue.",
+          "correction": "Provide a brief, source-scoped undo action that restores the removed prepared item at its previous position. Keep single-click removal rather than adding a routine confirmation.",
+          "verify": "Remove an item, undo it, and verify its identity, prepared sources and order are restored. Undo must not restore an item into another series after the active source changes.",
+          "affected": [
+            "FLOW-06",
+            "SURF-06",
+            "ACT-02",
+            "PLAT-03"
+          ],
+          "frequency": "occasional",
+          "effort": "M",
+          "cognitive_load": {
+            "factors": [
+              "R"
+            ],
+            "profile": "LAN viewer managing the episode queue",
+            "rationale": "Removal discards the prepared entry without an inverse action, requiring recovery through the separate Stremio source selection flow after an accidental tap.",
+            "claim_basis": "heuristic",
+            "profile_sensitivity": "none",
+            "court_referral": "no"
+          }
+        }
+      ],
+      "keep": [
+        "English auto-sync remains opt-in, uses bounded corrections and retains original timing when confidence is insufficient.",
+        "Queue advance rejects an unexpected next episode and automatic advance exposes a cancellable countdown.",
+        "Subtitle submission keeps controls intact on request failure and disables duplicate submission.",
+        "Configuration validation preserves invalid input, and account disconnect remains a reversible host-only action."
+      ],
+      "unknowns": [
+        "Reproduce stale subtitle submission with two browser tabs against an isolated server before accepting observed status.",
+        "Verify queue undo behavior on touch once a recovery path is implemented.",
+        "Native lifecycle interruption handling needs a safe owned-process tray test; no conclusion is drawn from untested installation or account data recovery."
+      ],
+      "cross_refs": [
+        "Context continuity: stale activation forms lack a source version guard; shared cause should be deduplicated if independently found.",
+        "Non-ideal states: queue removal recovery is a bounded error-tolerance issue, not evidence that persistent queue history is required."
+      ]
+    },
+    {
+      "evaluator": "06 - Interface hierarchy",
+      "dimension": "Interface hierarchy",
+      "rating": 2,
+      "confidence": "medium",
+      "coverage": {
+        "flows": [
+          "FLOW-01",
+          "FLOW-02",
+          "FLOW-03",
+          "FLOW-04",
+          "FLOW-05",
+          "FLOW-06"
+        ],
+        "surfaces": [
+          "SURF-02",
+          "SURF-03",
+          "SURF-04",
+          "SURF-05",
+          "SURF-06"
+        ],
+        "platforms": [
+          "PLAT-01",
+          "PLAT-03"
+        ],
+        "gaps": [
+          "No independent browser or screenshot inspection in this pass; runtime facts are limited to the lead's shared evidence.",
+          "Long titles, many audio/subtitle choices, zoomed text, physical TV viewing, Linux/native tray hierarchy remain unverified."
+        ]
+      },
+      "findings": [],
+      "keep": [
+        "Preserve the existing dark/mint identity, shared spacing and type hierarchy: src/pages.js:189-214 gives distinct page and section headings with bounded text widths.",
+        "Preserve primary/secondary action distinction: src/pages.js:256-282 and :912-914 visually distinguish saving the source from installing the add-on.",
+        "Preserve the separate timeline, playback controls and speech-sync row: src/pages.js:616-634 groups related controls without promoting optional speech matching above playback.",
+        "Preserve responsive stacking of settings/handoff and queue actions: src/pages.js:806-854; shared evidence reports no horizontal overflow at 390px."
+      ],
+      "unknowns": [
+        "Verify captions remain separate from all three control rows when a long speech-sync status wraps at 390px and at 200% text zoom; fixed caption offsets and wrapping controls need runtime geometry evidence before attributing overlap.",
+        "Inspect long episode titles and large audio/subtitle option sets on a physical TV or tablet before extending the current hierarchy rating to those environments."
+      ],
+      "cross_refs": [
+        "Behavioral consistency/status: polish-evidence.md reports controls hiding while playback is paused. This is an interaction-visibility observation for the corresponding evaluator; no duplicate hierarchy finding is asserted."
+      ],
+      "cognitive_load": {
+        "factors": [],
+        "profile": "Trusted LAN viewer (ACT-02) and host operator (ACT-01)",
+        "rationale": "Reviewed grouping, action prominence, and responsive rules; no material hierarchy defect is established by the available code and shared runtime observations. Memory, search, integration, decision, uncertainty, and recovery were considered without inventing a finding.",
+        "claim_basis": "heuristic",
+        "profile_sensitivity": "unknown",
+        "court_referral": "no"
+      }
+    },
+    {
+      "evaluator": "07 - Content and language",
+      "dimension": "Content and Language",
+      "rating": 2,
+      "confidence": "medium",
+      "coverage": {
+        "flows": [
+          "FLOW-01",
+          "FLOW-02",
+          "FLOW-03",
+          "FLOW-04",
+          "FLOW-05",
+          "FLOW-06",
+          "FLOW-07"
+        ],
+        "surfaces": [
+          "SURF-02",
+          "SURF-03",
+          "SURF-04",
+          "SURF-05",
+          "SURF-06",
+          "SURF-07",
+          "SURF-08"
+        ],
+        "platforms": [
+          "PLAT-01",
+          "PLAT-03",
+          "PLAT-05"
+        ],
+        "gaps": [
+          "Read-only source pass with lead-provided browser observations; no independent runtime or native tray language evaluation.",
+          "Linux installation and physical TV comprehension were not tested."
+        ]
+      },
+      "findings": [
+        {
+          "id": "POL-07-01",
+          "severity": "P2",
+          "title": "Setup and waiting instructions name a source label the add-on does not emit",
+          "evidence_type": "code",
+          "evidence": "src/pages.js:899 promises the action «Servir en red», and :1321 instructs waiting viewers to choose that exact label. src/streams.js:361 instead emits the source name `Unilink` followed by quality. The shared polish-evidence.md also records the waiting-screen wording at runtime.",
+          "user_effect": "A first-time host following the visible instructions must infer that an differently named Stremio result is the intended action, or keep searching for an absent label.",
+          "correction": "Use the actual source name in both places: configuration help «…para mostrar fuentes con el nombre Unilink en Stremio» and waiting step «Elige una fuente que empiece por Unilink». Keep the emitted name unchanged.",
+          "verify": "Render configuration and empty watch pages and compare their source-selection instructions with a decorated stream result; both must name Unilink, and neither may direct selection of «Servir en red».",
+          "affected": [
+            "FLOW-01",
+            "FLOW-02",
+            "SURF-02",
+            "SURF-04",
+            "SURF-08",
+            "ACT-01",
+            "PLAT-03"
+          ],
+          "frequency": "occasional",
+          "effort": "S",
+          "cognitive_load": {
+            "factors": [
+              "S",
+              "I"
+            ],
+            "profile": "first-time host operator",
+            "rationale": "During setup and source handoff, the host must search for «Servir en red» and reconcile it with the actual Unilink label demonstrated in src/streams.js:361.",
+            "claim_basis": "heuristic",
+            "profile_sensitivity": "none",
+            "court_referral": "no"
+          }
+        },
+        {
+          "id": "POL-07-02",
+          "severity": "P2",
+          "title": "Unavailable speech sync asks users to activate an unspecified engine",
+          "evidence_type": "code",
+          "evidence": "src/player.js:635 displays «Activa el motor local en el PC» for unavailable speech sync. The only documented setup path is `npm run setup:subtitle-sync` in README.md:89 and package.json:10; the shared evidence packet confirms no installer-bundled setup. The player message names neither a destination nor a concrete available action.",
+          "user_effect": "A viewer who opts into auto-sync cannot tell whether this is an application setting, missing installation, or a service to restart, and has no route from the message to the documented recovery.",
+          "correction": "Replace the generic activation request with «La sincronización necesita instalar el reconocimiento de voz en el ordenador que comparte el vídeo» and provide a reachable setup/help action describing the actual supported host setup. If setup remains checkout-only, state that limitation honestly instead of implying a built-in switch exists.",
+          "verify": "With engine files absent, enable English auto-sync and verify that the visible state identifies missing installation and provides a working route to host setup instructions, while playback remains usable.",
+          "affected": [
+            "FLOW-05",
+            "SURF-05",
+            "PLAT-03",
+            "PLAT-05",
+            "ACT-02"
+          ],
+          "frequency": "occasional",
+          "effort": "S",
+          "cognitive_load": {
+            "factors": [
+              "U",
+              "R"
+            ],
+            "profile": "LAN viewer using optional English synchronization",
+            "rationale": "When the unavailable state occurs, the viewer must infer what «motor local» denotes and discover how to recover without a named setup destination in the displayed message.",
+            "claim_basis": "heuristic",
+            "profile_sensitivity": "none",
+            "court_referral": "no"
+          }
+        }
+      ],
+      "keep": [
+        "Maintain Spanish task-oriented recovery messages for failed audio preparation, which identify Stremio and Reintentar.",
+        "Preserve the explicit low-confidence subtitle message that original timing is retained.",
+        "Keep the concise waiting-screen step sequence, with corrected source terminology."
+      ],
+      "unknowns": [
+        "Have a first-time host perform install and source handoff in real Stremio to verify label comprehension.",
+        "Probe unavailable speech setup at runtime once the setup destination is implemented; this pass inspected the existing branch only."
+      ],
+      "cross_refs": [
+        "Completeness and Seams: host speech installation is currently checkout-only, per README.md:89 and the shared packet. The content finding covers only the inaccurate or incomplete recovery instruction, not packaging architecture."
+      ]
+    },
+    {
+      "evaluator": "08 - Perceived performance",
+      "dimension": "Perceived Performance",
+      "rating": 2,
+      "confidence": "medium",
+      "coverage": {
+        "flows": [
+          "FLOW-02",
+          "FLOW-03",
+          "FLOW-04",
+          "FLOW-05",
+          "FLOW-06"
+        ],
+        "surfaces": [
+          "SURF-03",
+          "SURF-04",
+          "SURF-05",
+          "SURF-06"
+        ],
+        "platforms": [
+          "PLAT-01",
+          "PLAT-03",
+          "PLAT-04"
+        ],
+        "gaps": [
+          "No independent browser timing or filmstrip captured; runtime observations are lead-provided.",
+          "Linux, physical phone/TV, and native tray latency unverified."
+        ]
+      },
+      "findings": [
+        {
+          "id": "POL-08-01",
+          "severity": "P2",
+          "title": "The handoff page waits for optional episode preparation",
+          "evidence_type": "code",
+          "evidence": "src/server.js:793-817 activates the source, then awaits Promise.all of subtitle discovery and prepareSeriesMarathon before sending any activation HTML. prepareSeriesMarathon first fetches metadata with a 20-second deadline (line 415), then prepareMarathonItems awaits next-episode source requests, each with its own 20-second deadline (lines 323, 378). A slow optional upstream therefore delays the watch URL and handoff acknowledgment despite the source already being active. No browser latency measurement is claimed.",
+          "user_effect": "The host operator waits on a browser navigation without application acknowledgment or the second-screen address while optional next-episode work finishes.",
+          "correction": "Return the activation shell and watch address immediately after successful activation; prepare optional subtitles/queue in the background with source-generation guards, then update their local pending state through existing status polling.",
+          "verify": "With metadata or next-episode source responses held unresolved by a test fixture, activation HTML and the watch link arrive before those responses resolve; pending optional state becomes ready afterward; switching sources prevents stale completion from updating the new source.",
+          "affected": [
+            "FLOW-02",
+            "SURF-03",
+            "ACT-01",
+            "PLAT-01",
+            "PLAT-03"
+          ],
+          "frequency": "occasional",
+          "effort": "M",
+          "cognitive_load": {
+            "factors": [
+              "U"
+            ],
+            "profile": "ACT-01 host operator handing playback to another screen",
+            "rationale": "During FLOW-02 the delayed first HTML response in server.js leaves the host operator uncertain whether selection succeeded while unrelated queue preparation runs.",
+            "claim_basis": "heuristic",
+            "profile_sensitivity": "none",
+            "court_referral": "no"
+          }
+        },
+        {
+          "id": "POL-08-02",
+          "severity": "P3",
+          "title": "The waiting screen reloads its entire document every three seconds",
+          "evidence_type": "code",
+          "evidence": "src/pages.js:1312-1327 renders the inactive watch screen with setTimeout(() => location.reload(), 3000). This repeatedly replaces the same document even when no content changes; active playback already uses /api/status polling in src/player.js:1216-1249. Visual flicker and focus impact have not been measured.",
+          "user_effect": "A screen meant to remain open continuously performs repeated full-page navigation rather than staying stable while waiting for a source.",
+          "correction": "Poll /api/status from the waiting screen and navigate only when an active source appears, leaving the waiting document intact on empty status or transient network failure.",
+          "verify": "Leave an inactive watch page open for at least ten seconds: status requests occur but no document navigation occurs. Activate content and verify exactly one navigation to the player; transient failed polls retain the waiting screen.",
+          "affected": [
+            "FLOW-03",
+            "SURF-04",
+            "ACT-02",
+            "PLAT-03"
+          ],
+          "frequency": "frequent",
+          "effort": "S",
+          "cognitive_load": {
+            "factors": [],
+            "profile": "ACT-02 LAN viewer waiting for playback",
+            "rationale": "The repeated document navigation is demonstrated by the timer, but no material cognitive effect is established without observing focus, announcements, or visible redraw on the waiting screen.",
+            "claim_basis": "heuristic",
+            "profile_sensitivity": "none",
+            "court_referral": "no"
+          }
+        }
+      ],
+      "keep": [
+        "Background speech matching preserves playback and original timing for uncertain sections; the evidence packet reports successful real-video completion.",
+        "Subtitle settings acknowledge immediately with Aplicando and disable duplicate submission (src/pages.js:1137-1158).",
+        "Player preparation, buffering, and episode advance have immediate local text status; transient status polling failure does not interrupt playback (src/player.js:850, 1247, 1339, 1434)."
+      ],
+      "unknowns": [
+        "Measure activation navigation timing with slow metadata and next-episode fixtures before claiming user-visible duration.",
+        "Capture first play, seeking, and buffering on a physical LAN phone/TV; source inspection does not establish frame stability or decoder latency."
+      ],
+      "cross_refs": [
+        "Status and Feedback: optional activation work currently precedes the first application acknowledgment; same evidence as POL-08-01."
+      ]
+    },
+    {
+      "evaluator": "09 — Platform conventions",
+      "dimension": "Platform conventions",
+      "rating": 2,
+      "confidence": "medium",
+      "coverage": {
+        "flows": [
+          "FLOW-01",
+          "FLOW-03",
+          "FLOW-08"
+        ],
+        "surfaces": [
+          "SURF-01",
+          "SURF-02",
+          "SURF-05"
+        ],
+        "platforms": [
+          "PLAT-01",
+          "PLAT-02",
+          "PLAT-03"
+        ],
+        "gaps": [
+          "Native tray interaction and clean installation not exercised",
+          "Linux packaging and desktop session not exercised",
+          "Mobile Safari fullscreen, rotation, interruptions and safe areas not exercised",
+          "Browser back/forward behavior inspected in source only"
+        ]
+      },
+      "findings": [
+        {
+          "id": "POL-09-01",
+          "severity": "P2",
+          "title": "Windows tray executable is built as a console application",
+          "evidence_type": "code",
+          "evidence": "src-tauri/src/main.rs:1 contains only fn main and no release windows_subsystem attribute; no subsystem override exists under src-tauri or scripts. Read-only PE inspection of src-tauri/target/release/unilink-desktop.exe (artifact timestamp 2026-09-12 11:03:08 UTC) returns OptionalHeader.Subsystem=3 (Windows console), rather than GUI subsystem=2. README.md:7-10 and :65 promise quiet tray/background use without a terminal. Launch from Explorer was not reproduced in this pass.",
+          "user_effect": "The shipped host executable uses Windows console launch behavior despite being a tray-only app, exposing an unnecessary console window and taskbar surface when opened normally.",
+          "correction": "Set the Windows GUI subsystem for non-debug native builds in src-tauri/src/main.rs, retain debug console behavior, and rebuild the desktop package.",
+          "verify": "Inspect the rebuilt release executable and confirm PE subsystem=2. Launch it normally from Explorer on Windows and verify that only the expected tray icon and first-run browser appear, with no console window; exercise quit and relaunch. Keep debug diagnostics available.",
+          "affected": [
+            "FLOW-01",
+            "FLOW-08",
+            "SURF-01",
+            "ACT-01",
+            "PLAT-01"
+          ],
+          "frequency": "frequent",
+          "effort": "S",
+          "cognitive_load": {
+            "factors": [],
+            "profile": "Windows host operator launching the packaged tray application",
+            "rationale": "The PE header establishes a native presentation mismatch during launch; this pass did not observe user uncertainty, decisions, or recovery behavior and makes no material cognitive-load claim.",
+            "claim_basis": "heuristic",
+            "profile_sensitivity": "none",
+            "court_referral": "no"
+          }
+        }
+      ],
+      "keep": [
+        "Native tray menu and OS-default browser/protocol handling; owned-process gating prevents stopping an independently running server (src-tauri/src/lib.rs:199-220).",
+        "Single-instance handling opens configuration and refreshes status (src-tauri/src/lib.rs:417-420).",
+        "Player keyboard shortcuts skip native buttons, inputs and selects; browser fullscreen and a WebKit video fallback are present (src/player.js:1104-1112,1391-1418).",
+        "Stable /watch address and versioned media identity remain deliberate cross-device conventions."
+      ],
+      "unknowns": [
+        "Run Windows clean-install, upgrade, tray interaction, quit and relaunch smoke tests; this pass inspected source and an existing executable rather than operating the native app.",
+        "Build and launch on a supported Linux desktop with AppIndicator; inspect tray discoverability, default-browser opening, clipboard and shutdown there.",
+        "Exercise mobile Safari fullscreen with custom captions and selected audio, rotation, back navigation and interruptions; source fallback alone does not establish parity."
+      ],
+      "cross_refs": [
+        "Status and feedback: src-tauri/src/lib.rs:109-112,275-279,283-284,298-299 logs open/start failures or ignores clipboard failures without a native user-facing result. This is primarily feedback/recovery rather than a separately proven platform-convention defect."
+      ]
+    },
+    {
+      "evaluator": "10 - Built-in accessibility",
+      "dimension": "Built-in accessibility",
+      "rating": 2,
+      "confidence": "medium",
+      "coverage": {
+        "flows": [
+          "FLOW-01",
+          "FLOW-03",
+          "FLOW-04",
+          "FLOW-05",
+          "FLOW-06",
+          "FLOW-07"
+        ],
+        "surfaces": [
+          "SURF-02",
+          "SURF-03",
+          "SURF-04",
+          "SURF-05",
+          "SURF-06"
+        ],
+        "platforms": [
+          "PLAT-03"
+        ],
+        "gaps": [
+          "No independent runtime keyboard or accessibility-tree pass; lead reports 390px reflow without horizontal overflow.",
+          "Screen-reader speech, browser zoom/enlarged text, physical TV/touch, and contrast rendering are unverified.",
+          "Windows native tray accessibility and Linux native/browser behavior were not exercised."
+        ]
+      },
+      "findings": [
+        {
+          "id": "POL-10-01",
+          "severity": "P2",
+          "title": "Player range styling removes the explicit keyboard focus indicator",
+          "evidence_type": "code",
+          "evidence": "src/pages.js:233 sets outline:0 on all inputs. The replacement at lines 240-242 uses border color and box-shadow, but the more specific .player-controls input[type=range] at lines 651-657 sets border:0 and box-shadow:none. Thus both seek and volume controls lose every explicitly defined focus treatment. The browser's exact native thumb rendering remains unverified.",
+          "user_effect": "Keyboard viewers can reach the sliders but lack the deliberate visible focus treatment supplied on surrounding controls, making current position in the control row harder to locate.",
+          "correction": "Add a specific :focus-visible rule for player ranges with a visible outline and suitable offset that is not removed by their base styles.",
+          "verify": "Tab through play, timeline, mute, volume, audio and captions in a live player and confirm a distinct persistent focus indicator on both sliders, including narrow viewport and forced-colors mode.",
+          "affected": [
+            "FLOW-03",
+            "SURF-05",
+            "ACT-02",
+            "PLAT-03"
+          ],
+          "frequency": "frequent",
+          "effort": "S",
+          "cognitive_load": {
+            "factors": [
+              "S"
+            ],
+            "profile": "Keyboard-only LAN viewer",
+            "rationale": "During playback control navigation, the source-defined loss of slider focus styling makes locating the active control depend more on remembering the tab sequence; this is a heuristic consequence, not a measured user outcome.",
+            "claim_basis": "heuristic",
+            "profile_sensitivity": "none",
+            "court_referral": "no"
+          }
+        },
+        {
+          "id": "POL-10-02",
+          "severity": "P2",
+          "title": "Seek slider exposes a 0–1000 position rather than media time",
+          "evidence_type": "code",
+          "evidence": "src/pages.js:1387-1389 labels the seek range 'Posición del vídeo' but gives min=0/max=1000. src/player.js:1023-1028 updateClock updates seek.value to the normalized proportion and writes readable elapsed/duration only into a separate clock text node. There is no aria-valuetext or relationship between the slider and that clock in the inspected source.",
+          "user_effect": "A screen-reader viewer adjusting playback position receives normalized numeric progress without the elapsed and total time needed to choose a scene accurately.",
+          "correction": "Set the seek control's aria-valuetext to localized elapsed and total media time whenever its value updates; preserve native range keyboard operation.",
+          "verify": "With a screen reader, focus the seek control and use arrow keys at multiple positions; the announced value includes meaningful elapsed and total time and updates after both seek and playback progress.",
+          "affected": [
+            "FLOW-03",
+            "SURF-05",
+            "ACT-02",
+            "PLAT-03"
+          ],
+          "frequency": "frequent",
+          "effort": "S",
+          "cognitive_load": {
+            "factors": [
+              "I"
+            ],
+            "profile": "Screen-reader LAN viewer",
+            "rationale": "Selecting a scene requires integrating the normalized seek number with a separately located duration/clock; providing media time at the focused control removes that source-demonstrated translation requirement.",
+            "claim_basis": "heuristic",
+            "profile_sensitivity": "none",
+            "court_referral": "no"
+          }
+        }
+      ],
+      "keep": [
+        "Preserve native buttons, associated field labels, skip link, player keyboard shortcuts and focus-aware control visibility.",
+        "Preserve live status regions for playback failures, subtitle synchronization and settings saves, explicit toggle pressed states, and reduced-motion styling.",
+        "Preserve existing 390px reflow behavior reported by the lead."
+      ],
+      "unknowns": [
+        "Run NVDA with the Windows browser through onboarding, seek, audio selection and queue updates; screen-reader speech was not tested in this pass.",
+        "Test native tray menu operation with Windows keyboard/screen reader and Linux AppIndicator before claiming equivalent accessibility support.",
+        "Verify zoom at 200% and 400%, text enlargement, forced colors and runtime contrast in active/fullscreen player."
+      ],
+      "cross_refs": []
+    },
+    {
+      "evaluator": "11 - Context Continuity",
+      "dimension": "Context Continuity",
+      "rating": 2,
+      "confidence": "medium",
+      "coverage": {
+        "flows": [
+          "FLOW-01",
+          "FLOW-03",
+          "FLOW-04",
+          "FLOW-05",
+          "FLOW-06",
+          "FLOW-08"
+        ],
+        "surfaces": [
+          "SURF-02",
+          "SURF-03",
+          "SURF-05",
+          "SURF-06"
+        ],
+        "platforms": [
+          "PLAT-01",
+          "PLAT-02",
+          "PLAT-03"
+        ],
+        "gaps": [
+          "No independent browser reproduction of queue focus or back/forward restoration.",
+          "Native Windows reopen/install/upgrade and Linux runtime continuity were not exercised.",
+          "Physical TV and screen-reader continuity remain unverified."
+        ]
+      },
+      "findings": [
+        {
+          "id": "POL-11-01",
+          "severity": "P2",
+          "title": "Queue updates discard the user's focused episode control",
+          "evidence_type": "code",
+          "evidence": "src/player.js:748 removes every queue row with marathonList.replaceChildren(), then recreates all controls. handleMarathonAction at src/player.js:937-945 invalidates the fingerprint and invokes this renderer after both a successful move/remove and a failed request. No focus capture or restoration accompanies replacement. The focused button is therefore detached even on an unsuccessful edit; periodic state updates also use this renderer.",
+          "user_effect": "A keyboard viewer moving an episode several positions must locate the episode control again after each operation. A failed queue edit also destroys their navigation position despite retaining the queue data.",
+          "correction": "Preserve existing keyed queue rows, or capture the focused episode ID/action before replacement and restore its corresponding control afterward. When removal deletes the focused episode, select the next available episode control or the queue heading; preserve focus outside the queue.",
+          "verify": "Using only the keyboard, move an episode twice and confirm focus follows the same episode/action after each update. Simulate a failed move and confirm the original control retains focus. Remove a focused episode and confirm focus reaches a predictable neighboring control without jumping to the document body.",
+          "affected": [
+            "FLOW-06",
+            "SURF-06",
+            "ACT-02",
+            "PLAT-03"
+          ],
+          "frequency": "occasional",
+          "effort": "S",
+          "cognitive_load": {
+            "factors": [
+              "S",
+              "R"
+            ],
+            "profile": "LAN viewer operating the episode queue by keyboard",
+            "rationale": "FLOW-06 replaces the focused queue control after edits and failures, requiring the keyboard viewer to search for the same episode and reconstruct their interaction position. This follows the DOM replacement evidence; user workload has not been measured.",
+            "claim_basis": "heuristic",
+            "profile_sensitivity": "none",
+            "court_referral": "no"
+          }
+        }
+      ],
+      "keep": [
+        "Per-content resume position survives reload/retry through guarded localStorage, and completed playback clears the position (src/player.js:949-1005).",
+        "Audio language/name preference is restored and persisted, while native track switching retains time and playback intent (src/player.js:231-289).",
+        "Subtitle settings submit in place and retain user input on failure (src/pages.js:1138-1154).",
+        "Speech corrections remain scoped to the current source/audio/subtitle context; declared ephemeral opt-in should not be converted into unconditional persistence."
+      ],
+      "unknowns": [
+        "Reproduce queue focus acceptance checks in the lead's browser session; this evaluator used source evidence only.",
+        "Exercise browser back/forward restoration with playing and paused media; pageshow deliberately reloads BFCache-restored pages (src/player.js:1459).",
+        "Verify native Windows and Linux stop/reopen behavior with a real package; active source/queue loss on host restart is currently a declared in-memory constraint rather than an attributed defect."
+      ],
+      "cross_refs": [
+        "Built-In Accessibility: POL-11-01 concerns keyboard focus continuity; deduplicate by DOM replacement cause if independently found."
+      ]
+    },
+    {
+      "evaluator": "12 - Completeness and seams",
+      "dimension": "Completeness and seams",
+      "rating": 2,
+      "confidence": "medium",
+      "coverage": {
+        "flows": [
+          "FLOW-01",
+          "FLOW-03",
+          "FLOW-05",
+          "FLOW-08"
+        ],
+        "surfaces": [
+          "SURF-01",
+          "SURF-02",
+          "SURF-05"
+        ],
+        "platforms": [
+          "PLAT-01",
+          "PLAT-02",
+          "PLAT-03",
+          "PLAT-05"
+        ],
+        "gaps": [
+          "Read-only source pass; shared browser observations were supplied by lead, not independently reproduced.",
+          "Native Windows installation/tray and Linux packaging/runtime were not exercised.",
+          "Optional speech onboarding audience remains undeclared."
+        ]
+      },
+      "findings": [
+        {
+          "id": "POL-12-01",
+          "severity": "P2",
+          "title": "The optional speech feature has no in-product installation handoff",
+          "evidence_type": "code",
+          "evidence": "src/pages.js:1413 exposes Auto-sync inglés and only a status span. src/player.js:635 renders 'Activa el motor local en el PC' when unavailable, without a setup action or instruction link. README.md:86-96 provides the only installation path, npm run setup:subtitle-sync from a checkout with Python. src-tauri/src/lib.rs:311-344 has no speech setup tray action; src-tauri/tauri.conf.json:21 bundles the server sidecar rather than an optional-engine installer. The supplied evidence packet also records checkout-only setup.",
+          "user_effect": "A desktop-package user reaches a feature that asks them to activate an unspecified engine, then must leave the product and discover developer setup instructions before completing English synchronization.",
+          "correction": "Add an unavailable-state help link and host configuration section with exact prerequisites and the supported setup path; clearly identify checkout setup while that is the only supported method. If speech is intended for packaged end users, provide a host-side setup entry point before presenting it as a generally available desktop feature.",
+          "verify": "On a clean profile with the speech runtime absent, enabling English auto-sync exposes a reachable explanation and concrete supported next step. A LAN viewer is told the host must perform setup. Normal playback and captions remain usable; the unavailable state never implies setup completed.",
+          "affected": [
+            "FLOW-05",
+            "SURF-01",
+            "SURF-02",
+            "SURF-05",
+            "ACT-01",
+            "ACT-02",
+            "PLAT-01",
+            "PLAT-02",
+            "PLAT-03"
+          ],
+          "frequency": "occasional",
+          "effort": "S",
+          "cognitive_load": {
+            "factors": [
+              "S",
+              "I",
+              "U"
+            ],
+            "profile": "Host operator using the desktop package without a developer checkout",
+            "rationale": "The unavailable message names a local engine but provides no route to its checkout-only setup, requiring the operator to search outside the player and connect developer documentation to the feature they enabled.",
+            "claim_basis": "heuristic",
+            "profile_sensitivity": "unknown",
+            "court_referral": "no"
+          }
+        }
+      ],
+      "keep": [
+        "Speech matching stays opt-in, local, bounded to supported cue regions and additive with manual delay.",
+        "Unavailable or uncertain matching preserves playback and original captions.",
+        "Stable watch URL and explicit waiting state connect source activation to the viewer."
+      ],
+      "unknowns": [
+        "Clean-machine Windows install, upgrade, tray lifecycle and optional setup need an installer smoke test.",
+        "Linux tray, installation and optional speech dependencies require a Linux environment; source review is not release validation.",
+        "External Stremio protocol installation completion and live account integration were not tested in this pass."
+      ],
+      "cross_refs": [
+        "Content and language: the waiting-screen 'Servir en red' instruction versus emitted 'Unilink' source name is supported by the supplied packet and belongs primarily to evaluator 07.",
+        "Status and feedback: paused controls hiding and unconnected Stremio pending status are lead-observed signals, not independently attributed defects in this completeness pass."
+      ]
+    }
+  ]
+}

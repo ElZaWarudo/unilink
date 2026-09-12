@@ -1,0 +1,421 @@
+[
+  {
+    "assessor": "01 - Memory",
+    "dimension": "memory",
+    "verdict": "controlled",
+    "confidence": "low",
+    "claim_basis": "heuristic",
+    "coverage": {
+      "cases": [
+        "CL-CASE-01",
+        "CL-CASE-02",
+        "CL-CASE-08"
+      ],
+      "flows": [
+        "FLOW-01",
+        "FLOW-02",
+        "FLOW-08"
+      ],
+      "surfaces": [
+        "SURF-01",
+        "SURF-02",
+        "SURF-03",
+        "SURF-04"
+      ],
+      "conditions": [
+        "FLOW-01/02: first-time ACT-01 host operator, Windows host and browser, occasional setup and session handoff; familiarity and interruption risk inferred or unknown.",
+        "FLOW-08: ACT-01 host operator using tray start/stop/restart; lifecycle inspected in source only.",
+        "Baseline 8a320b9. Independent source inspection plus shared factual runtime packet; no other assessor or Council reports read."
+      ],
+      "gaps": [
+        "No representative novice task observation, interruption study, or workload measurement.",
+        "Native tray interaction and clean-machine installation are unverified.",
+        "External Stremio installation protocol completion and cross-device transfer behavior are unverified.",
+        "Browser native form submission was inconclusive in the shared packet; HTTP error behavior was observed by the lead."
+      ]
+    },
+    "findings": [],
+    "keep": [
+      "Configuration externalizes the manifest URL and preserves it both when re-opening the page and after rejected input (src/server.js:674-729; src/pages.js:881-916). Copying an existing provider configuration is necessary input; the app does not require recalling its contents.",
+      "Handoff keeps the selected title and details beside an explicit stable destination URL, copy action, opening action, and guidance that the tab may close (src/pages.js:1171-1204). Preserve these visible anchors and clipboard fallback.",
+      "Subtitle selections and timing are rendered from persisted preferences, and per-language source choices remain recognized within the form (src/pages.js:1015-1113). Do not replace these with instructions that require recall.",
+      "Tray provides stable named configuration, installation, watch and copy-link actions (src-tauri/src/lib.rs:312-344), allowing the destination to be retrieved after closing the handoff tab. Preserve these return paths.",
+      "Necessary host setup complexity includes obtaining the provider URL, installing the add-on in Stremio, and choosing a source. There is insufficient evidence to attribute a separate material memory burden to those domain steps."
+    ],
+    "unknowns": [
+      "A novice could forget the next step after switching to Stremio. Observe one complete setup and an interrupted return before claiming a memory-specific failure; missing guidance is currently better framed as uncertainty/search.",
+      "Restart clears in-memory active content and queue per the atlas. Observe whether users can reselect their source from Stremio before treating reconstruction as a distinct memory burden rather than recovery.",
+      "For cross-device transfer without shared clipboard, observe whether users can accurately enter the visible stable URL. No inference from URL length alone supports a finding."
+    ],
+    "cross_refs": [
+      "Search/Uncertainty: configuration ends with save/install actions and endpoint text without a watch handoff (src/pages.js:896-932); examine the next action for a first-time user. No distinct memory finding is asserted.",
+      "Integration: configuration and waiting instructions use Servir en red while the factual packet records Unilink source names. Matching terminology across the external step is principally integration, not evidence of measured memory strain.",
+      "Uncertainty/Recovery: start/restart failure is written to stderr and tray collapses non-running state to Servidor detenido (src-tauri/src/lib.rs:209-220,282-306). Failure diagnosis is owned by those dimensions; no additional memory claim is necessary."
+    ]
+  },
+  {
+    "assessor": "02 - Search",
+    "dimension": "search",
+    "verdict": "friction",
+    "confidence": "low",
+    "claim_basis": "heuristic",
+    "coverage": {
+      "cases": [
+        "CL-CASE-01",
+        "CL-CASE-02",
+        "CL-CASE-08"
+      ],
+      "flows": [
+        "FLOW-01",
+        "FLOW-02",
+        "FLOW-08"
+      ],
+      "surfaces": [
+        "SURF-01",
+        "SURF-02",
+        "SURF-03",
+        "SURF-04",
+        "SURF-08"
+      ],
+      "conditions": [
+        "Baseline 8a320b9; ACT-01 first-time host operator configuring and handing off content on Windows with pointer/keyboard",
+        "ACT-01 host operator locating start, stop and restart actions in the native tray; familiarity and interruption pressure unknown"
+      ],
+      "gaps": [
+        "No representative-user search observations or timing measures",
+        "Native tray was inspected in source, not operated",
+        "Actual Stremio source-list rendering and installation protocol completion unverified"
+      ]
+    },
+    "findings": [
+      {
+        "id": "CL-S-01",
+        "severity": "P2",
+        "title": "Configuration provides no visible route to the second-screen destination",
+        "evidence_type": "code",
+        "claim_basis": "heuristic",
+        "evidence": "src/pages.js:880-928 renders the configuration surface with Save, Install, account connection and a manifest endpoint footer, but no watch URL or action. The saved notice at lines 890-892 directs only installation. The route can instead be found in native tray actions at src-tauri/src/lib.rs:327-340 or after activation at src/pages.js:1180-1193. The factual packet independently records no visible route to the waiting player on /configure.",
+        "necessary_complexity": "partly-avoidable: installation in Stremio and source selection remain necessary; searching another surface for the stable viewer destination is avoidable",
+        "user_effect": "A new host preparing another device must find the tray or first select content to locate the viewer URL, despite already being on the setup surface. This predicts extra navigation, not measured task failure.",
+        "correction": "Add a compact next-steps area after source setup that exposes the stable second-screen URL with copy/open actions and identifies selecting a Unilink result in Stremio as the source-selection step.",
+        "verify": "On a clean profile, save a valid source configuration and locate the second-screen URL directly on the resulting page without returning to the tray or selecting content; copying and opening it should reach the waiting player. Preserve the existing source input and installation action.",
+        "affected": [
+          "CL-CASE-01",
+          "CL-CASE-02",
+          "FLOW-01",
+          "FLOW-02",
+          "SURF-02",
+          "SURF-04",
+          "ACT-01",
+          "PLAT-01"
+        ],
+        "frequency": "occasional",
+        "effort": "S"
+      }
+    ],
+    "keep": [
+      "Activation places the selected title, destination URL, copy and open actions together before subtitle settings (src/pages.js:1170-1200).",
+      "Tray separates destination actions from lifecycle actions and gives start, stop and restart explicit labels (src-tauri/src/lib.rs:310-364).",
+      "Manifest format help remains beside the input, and failed validation preserves its value (src/pages.js:880-915)."
+    ],
+    "unknowns": [
+      "No independent human evidence establishes search time or completion difficulty; observe a first-time host setting up a second device to assess magnitude.",
+      "Native tray failure-state interpretation belongs primarily to Uncertainty and Recovery; menu target acquisition has not been tested with assistive technology."
+    ],
+    "cross_refs": [
+      "Integration: src/pages.js:899 and 1321 tell the host to locate 'Servir en red', while src/streams.js:361 emits 'Unilink'. The mismatched terminology predicts source-list scanning, but its primary cause is the need to reconcile labels across surfaces.",
+      "Uncertainty: the absent next-step sequence on configuration may also leave setup completion unclear; CL-S-01 is limited to locating the viewer destination."
+    ]
+  },
+  {
+    "assessor": "03 - Integration",
+    "dimension": "integration",
+    "verdict": "friction",
+    "confidence": "low",
+    "claim_basis": "heuristic",
+    "coverage": {
+      "cases": [
+        "CL-CASE-01",
+        "CL-CASE-02",
+        "CL-CASE-08"
+      ],
+      "flows": [
+        "FLOW-01",
+        "FLOW-02",
+        "FLOW-08"
+      ],
+      "surfaces": [
+        "SURF-01",
+        "SURF-02",
+        "SURF-03",
+        "SURF-04",
+        "SURF-08"
+      ],
+      "conditions": [
+        "First-time ACT-01 host operator configuring and installing the add-on, then selecting and handing off a source on Windows",
+        "ACT-01 host operator starting, stopping, and restarting the native tray server",
+        "Code inspection at baseline 8a320b9, with supplied Windows browser observations; no human study"
+      ],
+      "gaps": [
+        "Actual Stremio source-list rendering and protocol installation completion not reproduced",
+        "Native tray failure and assistive-technology interaction not reproduced",
+        "No task switching, completion-time, error, or workload measurements"
+      ]
+    },
+    "findings": [
+      {
+        "id": "CL-I-01",
+        "severity": "P2",
+        "title": "Setup instructions and the source to select use different names",
+        "evidence_type": "code",
+        "claim_basis": "heuristic",
+        "evidence": "src/pages.js:899 describes the installed action as Servir en red, and src/pages.js:1321 asks the waiting viewer to choose that label. src/streams.js:361 generates the source name as Unilink followed by its quality label. The supplied polish-evidence.md also records the waiting instruction at runtime. Thus the novice must infer that a differently named Stremio result is the instructed action; actual user confusion was not measured.",
+        "necessary_complexity": "Partly avoidable: selecting a quality/source in a separate Stremio application is required by the product, but translating two names for the same source is unnecessary.",
+        "user_effect": "Predicted extra cross-referencing between setup or waiting instructions and Stremio results, with possible hesitation about whether installation produced the right add-on.",
+        "correction": "Use the emitted name Unilink in configuration and waiting instructions, with a short qualifier that the source may also show its quality. Keep the same terminology in the install-to-selection handoff.",
+        "verify": "Render configuration and empty watch pages and a decorated stream fixture; verify that both instructions name the actual Unilink prefix. In a safe Stremio walkthrough, confirm the named result can be identified without translating a second action label. This verifies consistency, not measured workload reduction.",
+        "affected": [
+          "CL-CASE-01",
+          "CL-CASE-02",
+          "FLOW-01",
+          "FLOW-02",
+          "SURF-02",
+          "SURF-04",
+          "SURF-08",
+          "ACT-01",
+          "PLAT-01"
+        ],
+        "frequency": "occasional",
+        "effort": "S"
+      }
+    ],
+    "keep": [
+      "Keep the source title and watch URL together on the activation handoff, including the copy action and clipboard fallback.",
+      "Keep subtitle source alternatives grouped by selected language and the Before/After delay explanation beside its controls (src/pages.js:1053-1100).",
+      "Keep configuration validation adjacent to the retained manifest input; the user should not reconstruct the failed value.",
+      "Keep lifecycle actions together in the tray and preserve owned-server action gating."
+    ],
+    "unknowns": [
+      "The external protocol and Stremio interface could add explanatory context; inspect a safe installed add-on selection before claiming behavioral impairment.",
+      "No evidence establishes that users join native logs to tray state successfully or unsuccessfully; native failure reproduction is the next probe."
+    ],
+    "cross_refs": [
+      "Search: inconsistent source terminology also weakens the ability to locate the named result; the shared root cause remains the label mismatch.",
+      "Uncertainty: configuration shows save and install actions but no subsequent watch handoff in the supplied runtime packet; absent next-step information is primarily an uncertainty question, not a separate integration finding.",
+      "Uncertainty and Recovery: src-tauri/src/lib.rs:206-211 collapses unavailable service into Servidor detenido, while start/restart errors at lines 284 and 299 only reach stderr. This is primarily missing state and recovery guidance; no distinct integration finding is added."
+    ]
+  },
+  {
+    "assessor": "04 - Decision",
+    "dimension": "decision",
+    "verdict": "controlled",
+    "confidence": "low",
+    "claim_basis": "heuristic",
+    "coverage": {
+      "cases": [
+        "CL-CASE-01",
+        "CL-CASE-02",
+        "CL-CASE-08"
+      ],
+      "flows": [
+        "FLOW-01",
+        "FLOW-02",
+        "FLOW-08"
+      ],
+      "surfaces": [
+        "SURF-01",
+        "SURF-02",
+        "SURF-03",
+        "SURF-04"
+      ],
+      "conditions": [
+        "FLOW-01/02: ACT-01 first-time host operator on Windows, pointer and keyboard; product-new profile inferred from assigned scope.",
+        "FLOW-08: ACT-01 host operator, occasional lifecycle control; no time-pressure assumption.",
+        "Baseline 8a320b9; factual atlas and evidence packet plus independent source inspection."
+      ],
+      "gaps": [
+        "No representative human behavior, decision time, hesitation, toggling, or workload measurements.",
+        "Native tray interaction and external Stremio protocol installation not reproduced.",
+        "End-to-end browser form submission remains unverified in shared packet."
+      ]
+    },
+    "findings": [],
+    "keep": [
+      "src/pages.js:911-915 separates Guardar fuente (primary form submission) from Instalar addon en Stremio (secondary external link); src/pages.js:892-894 states the save-then-install sequence after a successful save. Preserve the distinct action names and priority.",
+      "src/pages.js:1055-1081 labels subtitle language, alternate source, earlier/later timing, and reset separately. Preserve these useful controls and the plain-language timing explanation; option count alone is not a decision defect.",
+      "src-tauri/src/lib.rs:341-344 uses conventional start, stop, restart, and quit labels; apply_menu_state at 196-226 gates actions by actual running/owned state. Preserve ownership protection instead of removing legitimate lifecycle choices.",
+      "Choosing a streaming provider/source and deciding whether to interrupt shared playback are necessary domain decisions. This scoped pass found no distinct material comparison burden requiring removal of those choices."
+    ],
+    "unknowns": [
+      "To establish action-selection difficulty, observe a first-time host saving a source, installing the addon, selecting a stream, and handing off playback; record wrong-action choices separately from inability to locate or interpret the next step.",
+      "To assess lifecycle consequences, inspect the native tray with an active disposable viewer and ask the operator to explain stop versus quit before acting; no participant study was performed."
+    ],
+    "cross_refs": [
+      "Uncertainty: the shared packet records configuration ending without a visible player route; interpreting the next task step is primarily system/task-state guidance, not evidence that the visible action alternatives are indistinguishable.",
+      "Integration/Search: src/pages.js:899 uses Servir en red while the factual packet records actual source name Unilink. Terminology matching belongs to those factors; no separate Decision finding is asserted.",
+      "Uncertainty/Recovery: src-tauri/src/lib.rs:196-226 exposes running/stopped state; the factual packet records stderr-only startup failures. A missing cause and recovery path should be assessed under those factors, without treating start/stop/restart choice count as the problem."
+    ]
+  },
+  {
+    "assessor": "05 - Uncertainty",
+    "dimension": "uncertainty",
+    "verdict": "friction",
+    "confidence": "low",
+    "claim_basis": "heuristic",
+    "coverage": {
+      "cases": [
+        "CL-CASE-01",
+        "CL-CASE-02",
+        "CL-CASE-08"
+      ],
+      "flows": [
+        "FLOW-01",
+        "FLOW-02",
+        "FLOW-08"
+      ],
+      "surfaces": [
+        "SURF-01",
+        "SURF-02",
+        "SURF-03",
+        "SURF-04"
+      ],
+      "conditions": [
+        "FLOW-01/02: first-time ACT-01 host operator, inferred novice product familiarity, Windows keyboard/pointer, occasional setup and normal-session source handoff",
+        "FLOW-08: ACT-01 host operator starting, stopping, or restarting local server; interruptions affect LAN viewers"
+      ],
+      "gaps": [
+        "No representative human task observation or workload measurement",
+        "Native tray startup/failure behavior inspected in code only",
+        "External Stremio protocol completion not reproduced",
+        "Slow activation behavior derived from awaited code; no measured latency distribution"
+      ]
+    },
+    "findings": [
+      {
+        "id": "CL-U-01",
+        "severity": "P2",
+        "title": "Tray conflates intentional stop, startup, and failed startup",
+        "evidence_type": "code",
+        "claim_basis": "heuristic",
+        "evidence": "src-tauri/src/lib.rs:184-220 derives menu text solely from whether the HTTP health probe succeeds: Servidor activo or Servidor detenido. Start/restart errors at lines 283-300 are only printed to stderr; child termination at lines 153-165 drops the process without retaining a failure cause. open_onboarding_when_ready at lines 247-268 silently stops trying after twenty readiness polls. A host sees the same stopped state after a deliberate stop and a failed attempted start.",
+        "necessary_complexity": "partly-avoidable: users need to distinguish an externally owned server and deliberate interruption; inferring whether their start request is still progressing or has failed is avoidable.",
+        "user_effect": "Predicted uncertainty about whether the command was received or another start attempt is appropriate, with possible repeated clicks and no confidence that onboarding will appear. No such human behavior was measured.",
+        "correction": "Retain explicit starting and failed states for owned lifecycle operations, show a short safe failure explanation in the tray or a reachable local status surface, and clear failure only after a new operation or verified readiness. Preserve external-server ownership gating.",
+        "verify": "With isolated native fixtures, invoke a delayed start and a forced spawn/bind failure. Observe starting immediately, then active only after health succeeds or a distinguishable failure outcome. Deliberate stop must continue to say stopped. Verify a later successful retry clears the prior failure.",
+        "affected": [
+          "CL-CASE-08",
+          "FLOW-08",
+          "SURF-01",
+          "ACT-01",
+          "PLAT-01"
+        ],
+        "frequency": "occasional",
+        "effort": "M"
+      },
+      {
+        "id": "CL-U-02",
+        "severity": "P2",
+        "title": "Source selection has no app acknowledgment until optional preparation completes",
+        "evidence_type": "code",
+        "claim_basis": "heuristic",
+        "evidence": "src/server.js:781-819 changes the active registry source, then awaits Promise.all(loadActiveSubtitles, prepareSeriesMarathon) before sending activationPage. The selected source is already active, but the app provides no handoff page or preparation state while these external requests complete. The browser may show its generic loading indication; that does not explain that selection succeeded and optional preparation is pending.",
+        "necessary_complexity": "partly-avoidable: fetching subtitle and episode metadata takes legitimate asynchronous work; withholding confirmation of the already-selected source is avoidable.",
+        "user_effect": "Predicted uncertainty over whether Stremio handed off the source successfully and whether the user should wait or select again. This is a latency-sensitive risk, not evidence of observed duplicate selection or task failure.",
+        "correction": "Acknowledge selection promptly with the source and stable watch address, and report optional preparation as pending and subsequently complete or partially unavailable. Keep later updates bound to the selected source instance so old preparation cannot misreport a newer selection.",
+        "verify": "Delay subtitle/metadata fixture responses. Confirm that the handoff immediately identifies the accepted source and offers the watch address, then updates preparation status without reactivating the source. Fail optional preparation and confirm a useful partial-success message while current playback remains available.",
+        "affected": [
+          "CL-CASE-02",
+          "FLOW-02",
+          "SURF-03",
+          "ACT-01",
+          "PLAT-01"
+        ],
+        "frequency": "occasional",
+        "effort": "M"
+      }
+    ],
+    "keep": [
+      "Configuration save provides an explicit saved message and keeps invalid input available with a local explanation (src/pages.js:888-916).",
+      "Activation provides a stable watch address and source identity after preparation; preserve both in any faster acknowledgment.",
+      "Native controls distinguish owned and externally running servers for stop/restart availability; preserve that meaningful constraint."
+    ],
+    "unknowns": [
+      "Observe a first-time operator moving from saved configuration through external add-on installation to source selection; the current packet cannot establish comprehension or successful Stremio installation.",
+      "Exercise startup failure and delayed readiness in the native installed application; code establishes state collapse but not the OS presentation of all launch failures.",
+      "Measure representative activation latency before assigning a stronger burden or reliability verdict."
+    ],
+    "cross_refs": [
+      "Recovery: FLOW-08 failure explanation also supplies the basis for choosing an effective retry; the primary issue reported here is absence of distinguishable state.",
+      "Search/Integration: FLOW-01 configuration offers Save and Install but no visible watch destination, while source naming differs between Servir en red guidance and Unilink results. These may obscure the next step; they are not additional uncertainty-owned findings."
+    ]
+  },
+  {
+    "assessor": "06 - Recovery",
+    "dimension": "recovery",
+    "verdict": "friction",
+    "confidence": "low",
+    "claim_basis": "heuristic",
+    "coverage": {
+      "cases": [
+        "CL-CASE-01",
+        "CL-CASE-02",
+        "CL-CASE-08"
+      ],
+      "flows": [
+        "FLOW-01",
+        "FLOW-02",
+        "FLOW-08"
+      ],
+      "surfaces": [
+        "SURF-01",
+        "SURF-02",
+        "SURF-03",
+        "SURF-07"
+      ],
+      "conditions": [
+        "First-time ACT-01 host operator configuring and selecting a source on Windows, keyboard/pointer; occasional ACT-01 host operator recovering a stopped native server. Expertise and interruption risk inferred, no time pressure established."
+      ],
+      "gaps": [
+        "Native startup failure and tray recovery were inspected in code, not reproduced in native UI.",
+        "No representative-user behavior, recovery duration, workload measure, Linux runtime, or external protocol completion observed."
+      ]
+    },
+    "findings": [
+      {
+        "id": "CL-R-01",
+        "severity": "P2",
+        "title": "Failed server start leaves no actionable diagnosis in the recovery surface",
+        "evidence_type": "code",
+        "claim_basis": "heuristic",
+        "evidence": "src-tauri/src/lib.rs:115-166 propagates filesystem/sidecar spawn errors, and handles child termination without retaining a reason. Start/restart handlers at lines 283-300 print errors only to stderr. apply_menu_state at lines 198-221 exposes only active/stopped and enables another start. open_onboarding_when_ready at lines 247-265 silently ends after readiness retries. Thus an operator with a failed start can retry but cannot obtain the failure cause or a targeted recovery step from the tray.",
+        "necessary_complexity": "partly-avoidable: resolving a missing sidecar, inaccessible data directory, or unavailable port inherently needs different action; making the operator diagnose these without a visible bounded cause is avoidable.",
+        "user_effect": "Predicted repeated start attempts or outside support/log investigation before the host can restore service; no measured delay or inability to complete is claimed.",
+        "correction": "Retain a bounded sanitized startup/termination failure state and expose it with a concrete next step beside the tray retry action. Preserve the tray after initial failure, distinguish intentional stop, and clear the failure after a verified successful start.",
+        "verify": "With disposable native fixtures, cause missing-sidecar and occupied-port startup failures. Verify that the tray remains available, identifies an actionable reason, offers retry, preserves configuration, and returns to running after correcting the fixture and retrying. Also verify intentional stop is not labeled a failure.",
+        "affected": [
+          "CL-CASE-08",
+          "FLOW-08",
+          "FLOW-01",
+          "SURF-01",
+          "ACT-01",
+          "PLAT-01"
+        ],
+        "frequency": "unknown",
+        "effort": "M"
+      }
+    ],
+    "keep": [
+      "Configuration validation/save failure preserves the submitted manifest URL and provides an inline alert; src/server.js:710-724 and src/pages.js:888-912.",
+      "Expired activation explains returning to Stremio to reopen the movie; src/streams.js:192-195. Preserve that specific recovery instruction.",
+      "Tray stop/restart controls are gated by owned process state, and persistent host configuration survives normal server restart."
+    ],
+    "unknowns": [
+      "Native error discoverability and actual recovery effectiveness require a safe runtime failure probe; code evidence alone does not establish user comprehension.",
+      "Browser form submission was a documented verification gap, so no form-recovery defect is attributed to that observation."
+    ],
+    "cross_refs": [
+      "Uncertainty: the same native stopped label does not explain whether a start failed; the Recovery finding concerns restoring progress through a targeted corrective action.",
+      "Search/Integration: onboarding terminology and next-step visibility belong to those assessors unless a distinct failed-state reconstruction cost is established."
+    ]
+  }
+]
