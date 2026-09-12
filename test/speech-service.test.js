@@ -3,6 +3,7 @@ import test from 'node:test';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import { access } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { SpeechService } from '../src/speech-service.js';
 
 function fakeWorker() {
@@ -39,6 +40,23 @@ test('persistent worker is shared by simultaneous and subsequent requests', asyn
   await sent(worker,3);
   worker.reply({type:'result',id:worker.messages[2].id,state:'insufficient'});
   await third; assert.equal(starts,1);
+});
+
+test('private worker receives selected backend paths and preserves actual fallback metrics', async t => {
+  const worker = fakeWorker();
+  const service = new SpeechService({ paths: { ...paths, backend: 'vulkan',
+    nativeExecutable: '/native/unilink-whisper.exe', nativeModel: '/native/model.bin' },
+    spawnImpl: () => worker.child });
+  t.after(() => service.close());
+  const pending = service.run(input, new AbortController().signal);
+  await sent(worker, 1);
+  assert.equal(worker.messages[0].input.backend, 'vulkan');
+  assert.equal(worker.messages[0].input.nativeExecutable, '/native/unilink-whisper.exe');
+  assert.equal(worker.messages[0].input.nativeModel, '/native/model.bin');
+  assert.equal(worker.messages[0].input.modelPath, resolve('/model'));
+  worker.reply({ type: 'result', id: worker.messages[0].id, state: 'insufficient',
+    metrics: { backend: 'cpu', fallbackReason: 'vulkan_failed' } });
+  assert.deepEqual((await pending).metrics, { backend: 'cpu', fallbackReason: 'vulkan_failed' });
 });
 
 test('cooperative cancellation keeps the worker available for the next request', async t => {

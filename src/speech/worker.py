@@ -15,25 +15,15 @@ import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
 from alignment import find_anchors, fit_local, parse_vtt
+from backends import Cancelled, check_cancel, SpeechModel, NativeCleanupError
 
 
 class RequestError(Exception):
     pass
 
 
-class Cancelled(Exception):
-    pass
-
-
-def check_cancel(cancel):
-    if cancel is not None and cancel.is_set():
-        raise Cancelled()
-
-
-def load_model(path):
-    from faster_whisper import WhisperModel
-    return WhisperModel(path, device='cpu', compute_type='int8',
-                        cpu_threads=1, num_workers=1, local_files_only=True)
+def load_model(path, **options):
+    return SpeechModel(path, **options)
 
 
 class SpeechEngine:
@@ -45,13 +35,16 @@ class SpeechEngine:
         self.future = None
         self.model_path = None
 
-    def prepare_model(self, path):
+    def prepare_model(self, path, **options):
+        identity = (path, tuple(sorted(options.items())))
         with self.lock:
-            if self.model_path is not None and self.model_path != path:
+            if self.model_path is not None and self.model_path != identity:
                 raise RequestError('Speech model changed; restart the worker')
             if self.future is None or (self.future.done() and self.future.exception()):
-                self.model_path = path
-                self.future = self.pool.submit(self.loader, path)
+                if self.future is not None and isinstance(self.future.exception(), NativeCleanupError):
+                    self.future.exception().model.close()
+                self.model_path = identity
+                self.future = self.pool.submit(self.loader, path, **options)
             return self.future
 
     def acquire_recognition(self, cancel):
@@ -65,6 +58,18 @@ class SpeechEngine:
 
     def __exit__(self, *_args):
         self.pool.shutdown(wait=True, cancel_futures=True)
+        if self.future is not None and not self.future.cancelled():
+            error = self.future.exception()
+            model = error.model if isinstance(error, NativeCleanupError) else self.future.result() if error is None else None
+            if hasattr(model, 'close'):
+                while True:
+                    try:
+                        model.close()
+                        break
+                    except NativeCleanupError:
+                        # Keep the parent alive so the Node owner's bounded
+                        # process-tree shutdown can still reap this child.
+                        time.sleep(.1)
 
 
 def number(value: object, minimum: float, maximum: float) -> float:
@@ -99,6 +104,12 @@ def validate(request: dict) -> dict:
         raise RequestError('Local speech model is unavailable')
     if not (Path(model) / 'model.bin').is_file():
         raise RequestError('Local speech model is unavailable')
+    if request.get('backend', 'cpu') not in ('cpu', 'cuda', 'vulkan'):
+        raise RequestError('Invalid speech backend')
+    for name in ('nativeExecutable', 'nativeModel'):
+        value = request.get(name)
+        if value is not None and (not isinstance(value, str) or not Path(value).is_absolute()):
+            raise RequestError('Invalid native speech path')
     return request
 
 
@@ -136,7 +147,9 @@ def align(request: dict, engine=None, cancel=None, progress=lambda _stage: None)
     if Path(request['subtitlePath']).stat().st_size > 5_000_000:
         raise RequestError('Subtitle file exceeds size limit')
     cues = parse_vtt(Path(request['subtitlePath']).read_text(encoding='utf-8-sig'))
-    future = engine.prepare_model(request['modelPath'])
+    future = engine.prepare_model(request['modelPath'], backend=request.get('backend', 'cpu'),
+                                  native_executable=request.get('nativeExecutable'),
+                                  native_model=request.get('nativeModel'))
     warm = future.done() and future.exception() is None
     progress('extracting')
     metadata = json.loads(run_process([
@@ -184,21 +197,16 @@ def align(request: dict, engine=None, cancel=None, progress=lambda _stage: None)
         try:
             check_cancel(cancel)
             progress('recognizing')
-            segments, _ = model.transcribe(wav, language='en', beam_size=1,
-                                           temperature=0, word_timestamps=True,
-                                           vad_filter=True, condition_on_previous_text=False)
-            words = []
-            for segment in segments:
-                check_cancel(cancel)
-                words.extend(dict(word=word.word, start=word.start + request['start'], probability=word.probability)
-                             for word in (segment.words or []))
+            words = [dict(word, start=word['start'] + request['start'])
+                     for word in model.recognize(wav, cancel)]
         finally:
             engine.recognition_lock.release()
         check_cancel(cancel)
         progress('matching')
         anchors = find_anchors(cues, words, 0, request['start'], request['duration'])
         result = fit_local(anchors, cues)
-        result['metrics'] = dict(modelWarm=warm, prepareMs=round((prepared-begun)*1000),
+        result['metrics'] = dict(backend=model.backend, fallbackReason=model.fallback_reason,
+                                modelWarm=warm, prepareMs=round((prepared-begun)*1000),
                                 waitMs=round((recognition_started-prepared)*1000),
                                 recognitionMs=round((time.monotonic()-recognition_started)*1000))
         return result

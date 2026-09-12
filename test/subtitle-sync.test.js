@@ -65,6 +65,28 @@ test("close during release prevents recreation and failed release can be retried
   assert.equal(sync.service, oldService);
 });
 
+test("changing backend waits for owned service exit and clears previous correction cache", async () => {
+  const sync = new SubtitleSync({ run: async () => ({ state: 'ready', result,
+    metrics: { backend: 'cpu' } }), paths: { backend: 'cpu' } });
+  const first = sync.start(context());
+  assert.equal((await completed(sync, first.jobId)).state, 'ready');
+  let finish;
+  const old = { close: () => new Promise(resolve => { finish = resolve; }) };
+  sync.service = old;
+  const change = sync.setBackend('vulkan');
+  assert.equal(sync.start(context()).state, 'busy');
+  assert.equal(sync.paths.backend, 'cpu');
+  finish();
+  await change;
+  assert.notEqual(sync.service, old);
+  assert.equal(sync.service.paths.backend, 'vulkan');
+  assert.equal(sync.backendStatus(), null);
+  const next = sync.start(context());
+  assert.notEqual(next.jobId, first.jobId);
+  assert.equal((await completed(sync, next.jobId)).state, 'ready');
+  await sync.close();
+});
+
 test("deduplicates same window, limits concurrency, and caches by source/track", async () => {
   let release, calls = 0;
   const sync = new SubtitleSync({ maxConcurrent: 1, run: async () => { calls++; return new Promise(r => { release = r; }); } });

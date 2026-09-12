@@ -9,6 +9,7 @@ import { runInNewContext } from "node:vm";
 import { ConfigStore } from "../src/config.js";
 import { createUnilinkServer } from "../src/server.js";
 import { StreamRegistry } from "../src/streams.js";
+import { SpeechSetup } from "../src/speech-setup.js";
 
 async function listen(server) {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -35,11 +36,158 @@ async function fixture(options = {}) {
   const baseUrl = await listen(server);
   return {
     baseUrl,
+    server,
     configStore,
     registry,
     close: () => server.shutdown(),
   };
 }
+
+test('backend initialization retries transient config failures', async t => {
+  let loads = 0;
+  const app = await fixture({ configStore: { load: async () => {
+    if (++loads === 1) throw Error('temporary read failure');
+    return {};
+  } } });
+  t.after(app.close);
+  assert.equal((await fetch(`${app.baseUrl}/configure`)).status, 500);
+  assert.equal((await fetch(`${app.baseUrl}/configure`)).status, 200);
+});
+
+test('backend initialization restores partial changes before retrying', async t => {
+  const changes = [];
+  let fail = true, selected = 'cpu', setupSelected = 'cpu';
+  const app = await fixture({ configStore: { load: async () => ({ speechBackend: 'vulkan' }) },
+    subtitleSync: { close: async () => {}, setBackend: async value => { selected = value; changes.push(`sync:${value}`); } },
+    speechSetup: { close: async () => {}, setBackend: async value => {
+      setupSelected = value; changes.push(`setup:${value}`);
+      if (value === 'vulkan' && fail) { fail = false; throw Error('temporary setup failure'); }
+    } } });
+  t.after(app.close);
+  assert.equal((await fetch(`${app.baseUrl}/configure`)).status, 500);
+  assert.equal(selected, 'cpu');
+  assert.equal(setupSelected, 'cpu');
+  assert.equal((await fetch(`${app.baseUrl}/configure`)).status, 200);
+  assert.equal(selected, 'vulkan');
+  assert.equal(setupSelected, 'vulkan');
+  assert.deepEqual(changes, ['sync:vulkan', 'setup:vulkan', 'sync:cpu', 'setup:cpu', 'sync:vulkan', 'setup:vulkan']);
+});
+
+test('shutdown waits for native installation cleanup after cancellation', async () => {
+  let entered, finish;
+  const installing = new Promise(resolve => { entered = resolve; });
+  const setup = new SpeechSetup({ paths: { backend: 'vulkan' }, available: async () => true,
+    run: async () => {}, installNativeImpl: async (_paths, signal) => {
+      entered();
+      await new Promise(resolve => { finish = resolve; });
+      signal.throwIfAborted();
+    } });
+  const app = await fixture({ speechSetup: setup });
+  setup.start();
+  await installing;
+  let closed = false;
+  const closing = app.close().then(() => { closed = true; });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const waited = !closed;
+  finish();
+  await closing;
+  assert.equal(waited, true);
+});
+
+test('backend initialization deduplicates active work and retries incomplete rollback first', async t => {
+  let finish, entered;
+  const initializing = new Promise(resolve => { entered = resolve; });
+  const changes = [];
+  let failSetup = true, failRestore = true;
+  const app = await fixture({ configStore: { load: async () => ({ speechBackend: 'vulkan' }) },
+    subtitleSync: { close: async () => {}, setBackend: async value => {
+      changes.push(`sync:${value}`);
+      if (!finish) { entered(); await new Promise(resolve => { finish = resolve; }); }
+      if (value === 'cpu' && failRestore) { failRestore = false; throw Error('still stopping'); }
+    } },
+    speechSetup: { close: async () => {}, setBackend: async value => {
+      changes.push(`setup:${value}`);
+      if (value === 'vulkan' && failSetup) { failSetup = false; throw Error('unavailable'); }
+    } } });
+  t.after(app.close);
+  const first = fetch(`${app.baseUrl}/configure`);
+  await initializing;
+  const receivedSecond = new Promise(resolve => app.server.once('request', () => setImmediate(resolve)));
+  const second = fetch(`${app.baseUrl}/configure`);
+  await receivedSecond;
+  assert.deepEqual(changes, ['sync:vulkan']);
+  finish();
+  assert.deepEqual((await Promise.all([first, second])).map(response => response.status), [500, 500]);
+  assert.equal((await fetch(`${app.baseUrl}/configure`)).status, 200);
+  assert.deepEqual(changes, ['sync:vulkan', 'setup:vulkan', 'sync:cpu', 'setup:cpu',
+    'sync:cpu', 'setup:cpu', 'sync:vulkan', 'setup:vulkan']);
+});
+
+test("backend selection is protected, persisted, restored on failure, and applied before startup requests", async t => {
+  let selected = "cpu", setupSelected = "cpu", failSave = false;
+  let stored = { speechBackend: "vulkan" };
+  const changes = [];
+  const app = await fixture({
+    configStore: { load: async () => stored, save: async value => {
+      if (failSave) throw new Error("disk full");
+      stored = { ...stored, ...value }; return stored;
+    } },
+    subtitleSync: { close: async () => {}, setBackend: async value => { selected = value; changes.push(value); },
+      backendStatus: () => ({ backend: "cpu", fallbackReason: "vulkan_unavailable" }) },
+    speechSetup: { close: async () => {}, setBackend: async value => { setupSelected = value; },
+      status: async () => ({ state: "ready", busy: false, backend: setupSelected }) },
+  });
+  t.after(app.close);
+  const html = await fetch(`${app.baseUrl}/configure`).then(r => r.text());
+  const token = html.match(/data-speech-setup data-token="([^"]+)"/)[1];
+  assert.equal(selected, "vulkan");
+  const post = (backend, headers = {}) => fetch(`${app.baseUrl}/api/speech-backend`, { method: "POST",
+    headers: { "content-type": "application/json", "x-unilink-token": token, ...headers }, body: JSON.stringify({ backend }) });
+  assert.equal((await post("cpu", { "x-unilink-token": "wrong" })).status, 403);
+  assert.equal((await post("cpu", { origin: "https://evil.example" })).status, 403);
+  assert.equal((await post("unknown")).status, 400);
+  assert.deepEqual(changes, ["vulkan"]);
+  const response = await post("cuda");
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("access-control-allow-origin"), null);
+  assert.equal((await response.json()).requestedBackend, "cuda");
+  assert.equal(stored.speechBackend, "cuda");
+  failSave = true;
+  assert.equal((await post("vulkan")).status, 500);
+  assert.equal(selected, "cuda");
+  assert.equal(setupSelected, "cuda");
+  const status = await fetch(`${app.baseUrl}/api/speech-setup`, { headers: { "x-unilink-token": token } }).then(r => r.json());
+  assert.equal(status.requestedBackend, "cuda");
+  assert.equal(status.runtime.fallbackReason, "vulkan_unavailable");
+});
+
+test("backend changes serialize and installation blocks a backend switch", async t => {
+  let finish, entered = false, backend = "cpu";
+  const setup = { task: null, close: async () => {}, setBackend: async () => {},
+    status: async () => ({ state: "ready", busy: false }) };
+  const app = await fixture({ speechSetup: setup, subtitleSync: { close: async () => {},
+    setBackend: async value => {
+      if (value === "vulkan") { entered = true; await new Promise(resolve => { finish = resolve; }); }
+      backend = value;
+    } } });
+  t.after(app.close);
+  const html = await fetch(`${app.baseUrl}/configure`).then(r => r.text());
+  const token = html.match(/data-speech-setup data-token="([^"]+)"/)[1];
+  const post = value => fetch(`${app.baseUrl}/api/speech-backend`, { method: "POST",
+    headers: { "x-unilink-token": token }, body: JSON.stringify({ backend: value }) });
+  const first = post("vulkan");
+  for (let i = 0; i < 100 && !entered; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(entered, true);
+  const second = post("cuda");
+  finish();
+  assert.equal((await first).status, 200);
+  assert.equal((await second).status, 200);
+  assert.equal(backend, "cuda");
+  assert.equal((await app.configStore.load()).speechBackend, "cuda");
+  setup.task = Promise.resolve();
+  assert.equal((await post("cpu")).status, 500);
+  assert.equal(backend, "cuda");
+});
 
 test("player timing reaches PC status securely without changing saved caption settings", async t => {
   const app = await fixture();

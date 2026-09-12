@@ -89,6 +89,27 @@ and offers a retry if it fails. Existing installations are detected automaticall
 The desktop package does not require Node.js or a source checkout for this step.
 Developers can also run `npm run setup:subtitle-sync` from the checkout.
 
+The PC configuration page offers three speech engines:
+
+- **CPU (faster-whisper)** is the default and remains installed as the fallback.
+- **NVIDIA CUDA (faster-whisper)** uses CUDA 12 and cuDNN 9 when a compatible
+  NVIDIA GPU and its runtime libraries are installed. Follow the
+  [faster-whisper GPU requirements](https://github.com/SYSTRAN/faster-whisper#gpu).
+- **Vulkan (whisper.cpp)** supports compatible AMD and other Vulkan GPUs on
+  Windows x64. Select it, apply the choice, and install its separate English model.
+  The desktop package supplies the native engine; no compiler is needed on the PC.
+
+The choice persists across restarts. Configuration shows the engine actually used
+after a sync request, including CPU fallback when GPU initialization or recognition
+fails. The model stays loaded between requests. Changing engines restarts the speech
+worker; cancelling native recognition terminates its private process and allows a
+clean restart. Recognition is serialized while audio preparation can overlap.
+
+GPU speed depends on the hardware. On the tested Ryzen 5 5500U with integrated
+Radeon graphics, a warm 60-second sample took 25.5 seconds on CPU and 29.7 seconds
+with Vulkan. CPU therefore remains the default. CUDA execution requires separate
+validation on an NVIDIA machine.
+
 Setup requires Python 3.10 or newer and downloads the English `base.en` model and
 its Python dependencies. Installation needs Internet access and stops after
 20 minutes if it cannot finish; retry resumes reusable downloads. Windows uses
@@ -106,10 +127,19 @@ Audio and recognized words stay on the host; playback does not wait for analysis
 Corrections apply only within sections supported by at least six consistent
 phrase matches. Music, paraphrased subtitles, and uncertain matches can leave a
 section unchanged. The player analyzes later sections as playback advances;
-seeking or changing tracks discards pending work. Manual subtitle delay remains
-additive, and switching auto-sync off restores the original cue timings.
+seeking or changing tracks discards pending work. Enabling Auto-sync starts from
+automatic timing; subsequent manual adjustments are added to it. The PC caption
+section shows the effective live delay. Switching Auto-sync off restores manual
+timing, and recoverable errors retry while it remains enabled.
 The first correction can take around a minute on a laptop CPU. This is local
 phrase timing, not a guarantee of frame-accurate alignment across an episode.
+
+For Windows developer builds, run `npm run build:speech-native` with CMake,
+Ninja, MinGW g++ and objdump on `PATH`. It verifies pinned source and tool hashes,
+builds the Vulkan worker, and stages its runtime libraries and license notices.
+`npm run build:sidecar` checks that this bundle matches the current native source
+before packaging it. Build tools are downloaded only for developer builds;
+`build/speech-native` is the packaged runtime bundle.
 
 ## Playback recovery
 

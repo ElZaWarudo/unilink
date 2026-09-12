@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,6 +11,20 @@ import {
   normalizeTorrentioManifestUrl,
   torrentioResourceUrl,
 } from "../src/config.js";
+
+test("speech backend survives unrelated saves and rejects unknown stored values", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "unilink-backend-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, "config.json");
+  const store = new ConfigStore(path);
+  for (const speechBackend of ["vulkan", "cuda", "cpu"]) {
+    await store.save({ speechBackend });
+    await store.save({ stremioAuthKey: "test" });
+    assert.equal((await store.load()).speechBackend, speechBackend);
+  }
+  await store.save({ speechBackend: "unknown" });
+  assert.equal((await store.load()).speechBackend, undefined);
+});
 
 test("keeps the Stremio session across settings saves and removes it on disconnect", async () => {
   const directory = await mkdtemp(join(tmpdir(), "unilink-session-"));

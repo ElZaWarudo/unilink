@@ -10,6 +10,7 @@ import { SubtitleSyncStatus } from "./subtitle-sync-status.js";
 import { SpeechSetup } from "./speech-setup.js";
 
 import {
+  SPEECH_BACKENDS,
   normalizeTorrentioManifestUrl,
   torrentioResourceUrl,
 } from "./config.js";
@@ -536,12 +537,49 @@ export function createUnilinkServer({
   const progressToken = randomUUID();
   const liveSubtitleSync = new SubtitleSyncStatus();
   const stremioSync = new StremioSync({ configStore, fetchImpl });
+  let requestedBackend = "cpu";
+  let backendInitialization;
+  let backendRestore = false;
+  let speechQueue = Promise.resolve();
+  const queueSpeech = action => {
+    const pending = speechQueue.then(action);
+    speechQueue = pending.catch(() => {});
+    return pending;
+  };
+  const restoreInitialBackend = async () => {
+    const restored = await Promise.allSettled([
+      subtitleSync.setBackend(requestedBackend), speechSetup.setBackend(requestedBackend),
+    ]);
+    if (restored.some(result => result.status === "rejected")) {
+      throw new Error("No se pudo restaurar el motor. Vuelve a intentarlo.");
+    }
+    backendRestore = false;
+  };
+  const initializeBackend = () => backendInitialization ??= queueSpeech(async () => {
+    if (backendRestore) await restoreInitialBackend();
+    const config = await configStore.load();
+    const backend = config.speechBackend ?? "cpu";
+    if (backend !== "cpu") {
+      backendRestore = true;
+      try {
+        await subtitleSync.setBackend(backend);
+        await speechSetup.setBackend(backend);
+      } catch (error) {
+        await restoreInitialBackend();
+        throw error;
+      }
+      backendRestore = false;
+    }
+    requestedBackend = backend;
+  }).catch(error => { backendInitialization = null; throw error; });
+  const speechStatus = async () => ({ ...await speechSetup.status(), requestedBackend,
+    runtime: subtitleSync.backendStatus?.() ?? null });
 
   const server = createServer(async (request, response) => {
     applyCommonHeaders(response);
     const url = new URL(request.url, "http://unilink.local");
     const pathname = url.pathname;
-    if (["/watch", "/session", "/settings", "/configure", "/api/progress", "/api/subtitle-sync", "/api/subtitle-sync/playback", "/api/speech-setup"].includes(pathname) || pathname.startsWith("/api/stremio/") || pathname.startsWith("/api/marathon/")) {
+    if (["/watch", "/session", "/settings", "/configure", "/api/progress", "/api/subtitle-sync", "/api/subtitle-sync/playback", "/api/speech-setup", "/api/speech-backend"].includes(pathname) || pathname.startsWith("/api/stremio/") || pathname.startsWith("/api/marathon/")) {
       response.removeHeader("Access-Control-Allow-Origin");
       response.setHeader("Referrer-Policy", "no-referrer");
       response.setHeader("X-Frame-Options", "DENY");
@@ -565,6 +603,9 @@ export function createUnilinkServer({
     }
 
     try {
+      if (["/configure", "/api/speech-backend", "/api/speech-setup", "/api/subtitle-sync"].includes(pathname)) {
+        await initializeBackend();
+      }
       let sessionForm;
       let sessionActive;
       const currentSession = () => Boolean(sessionActive && registry.active === sessionActive);
@@ -581,16 +622,52 @@ export function createUnilinkServer({
         sync: stremioSync, registry, serverInstanceId, adminToken, progressToken,
         loopback: isLoopback(request.socket.remoteAddress) })) return;
       if (sessionForm && !currentSession()) { rejectStale(); return; }
+      if (pathname === "/api/speech-backend") {
+        if (!isLoopback(request.socket.remoteAddress) || request.headers["x-unilink-token"] !== adminToken) {
+          sendJson(response, 403, { error: "El motor solo se puede cambiar desde la configuración del PC." }); return;
+        }
+        if (request.method !== "POST") { sendJson(response, 405, { error: "Método no permitido." }); return; }
+        let raw = "";
+        for await (const chunk of request) {
+          raw += chunk;
+          if (Buffer.byteLength(raw) > 1024) { sendJson(response, 413, { error: "Solicitud demasiado grande." }); return; }
+        }
+        let body;
+        try { body = JSON.parse(raw); } catch { sendJson(response, 400, { error: "Solicitud no válida." }); return; }
+        if (!SPEECH_BACKENDS.includes(body?.backend)) { sendJson(response, 400, { error: "Motor no válido." }); return; }
+        await queueSpeech(async () => {
+          if (speechSetup.task) throw new Error("Espera a que termine la instalación antes de cambiar el motor.");
+          if (body.backend === requestedBackend) return;
+          const previous = requestedBackend;
+          try {
+            await subtitleSync.setBackend(body.backend);
+            await speechSetup.setBackend(body.backend);
+            await configStore.save({ speechBackend: body.backend });
+            requestedBackend = body.backend;
+          } catch (error) {
+            const restored = await Promise.allSettled([subtitleSync.setBackend(previous), speechSetup.setBackend(previous)]);
+            if (restored.some(result => result.status === "rejected")) {
+              throw new Error("No se pudo restaurar el motor. Reinicia Unilink antes de continuar.");
+            }
+            throw error;
+          }
+        });
+        sendJson(response, 200, await speechStatus()); return;
+      }
       if (pathname === "/api/speech-setup") {
         if (!isLoopback(request.socket.remoteAddress) || request.headers["x-unilink-token"] !== adminToken) {
           sendJson(response, 403, { error: "La instalación solo está disponible desde la configuración del PC." });
           return;
         }
         if (request.method === "GET") {
-          sendJson(response, 200, await speechSetup.status());
+          await speechQueue;
+          sendJson(response, 200, await speechStatus());
         } else if (request.method === "POST") {
-          await subtitleSync.release?.();
-          sendJson(response, 202, speechSetup.start());
+          const status = await queueSpeech(async () => {
+            await subtitleSync.release?.();
+            return { ...speechSetup.start(), requestedBackend, runtime: null };
+          });
+          sendJson(response, 202, status);
         } else {
           sendJson(response, 405, { error: "Método no permitido." });
         }

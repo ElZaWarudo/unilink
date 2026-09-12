@@ -3,6 +3,45 @@ import test from "node:test";
 import vm from "node:vm";
 import { activationPage, configurationPage, watchPage } from "../src/pages.js";
 
+test("speech backend controls preserve a pending choice and display confirmed CPU fallback", async () => {
+  const nodes = new Map();
+  const node = selector => {
+    const value = { value: "cpu", dataset: { token: "host-token" }, handlers: {},
+      querySelector: key => nodes.get(key), setAttribute() {},
+      addEventListener: (event, callback) => { value.handlers[event] = callback; } };
+    nodes.set(selector, value); return value;
+  };
+  for (const selector of ["[data-speech-setup]", "[data-speech-setup-status]", "[data-speech-setup-start]",
+    "[data-speech-backend]", "[data-speech-backend-apply]", "[data-speech-backend-status]"]) node(selector);
+  const requests = [], timers = [], events = {};
+  const html = configurationPage({ manifestUrl: "http://127.0.0.1:17891/manifest.json" });
+  const script = html.slice(html.indexOf("const speech = document"), html.indexOf("window.addEventListener('pageshow'"));
+  vm.runInNewContext(script, { document: { querySelector: selector => nodes.get(selector) },
+    fetch: (url, options) => new Promise(resolve => requests.push({ url, options, resolve })),
+    setTimeout: callback => { timers.push(callback); return timers.length; }, clearTimeout() {},
+    AbortController, AbortSignal, window: { addEventListener: (event, callback) => { events[event] = callback; } } });
+  const reply = async value => { requests.at(-1).resolve({ ok: true, json: async () => value }); await new Promise(resolve => setImmediate(resolve)); };
+  const status = { requestedBackend: "cpu", state: "ready", busy: false, message: "Disponible" };
+  await reply(status);
+  const select = nodes.get("[data-speech-backend]"), apply = nodes.get("[data-speech-backend-apply]");
+  assert.equal(apply.disabled, true);
+  select.value = "vulkan"; select.handlers.change();
+  timers.shift()(); await reply(status);
+  assert.equal(select.value, "vulkan");
+  assert.equal(apply.disabled, false);
+  const pending = apply.handlers.click();
+  assert.equal(requests.at(-1).url, "/api/speech-backend");
+  assert.equal(JSON.parse(requests.at(-1).options.body).backend, "vulkan");
+  assert.equal(select.disabled, true);
+  await reply({ ...status, requestedBackend: "vulkan", runtime: { backend: "cpu", fallbackReason: "vulkan_failed" } });
+  await pending;
+  assert.equal(select.value, "vulkan");
+  assert.equal(apply.disabled, true);
+  assert.match(nodes.get("[data-speech-backend-status]").textContent, /GPU no disponible; usando CPU/);
+  events.pagehide();
+  assert.equal(requests.at(-1).options.signal.aborted, true);
+});
+
 test("setup completes the viewing handoff and labels account linking optional", () => {
   const html = configurationPage({ manifestUrl: "http://127.0.0.1:17891/manifest.json", watchUrl: "http://192.168.1.2:17891/watch" });
   assert.match(html, /http:\/\/192\.168\.1\.2:17891\/watch/);

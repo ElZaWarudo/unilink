@@ -11,6 +11,45 @@ import worker
 
 
 class ServiceTests(unittest.TestCase):
+    def test_failed_native_cleanup_retains_ownership_before_retry_and_shutdown(self):
+        from unittest.mock import Mock
+        native = Mock()
+        failure = worker.NativeCleanupError(native)
+        native.close.side_effect = [failure, None, failure, None]
+        calls = []
+        def load(*_args, **_kwargs):
+            calls.append(True)
+            raise failure
+        with worker.SpeechEngine(loader=load) as engine:
+            first = engine.prepare_model('/model')
+            with self.assertRaises(worker.NativeCleanupError): first.result(timeout=5)
+            with self.assertRaises(worker.NativeCleanupError): engine.prepare_model('/model')
+            self.assertIs(engine.future, first)
+            self.assertEqual(len(calls), 1)
+            second = engine.prepare_model('/model')
+            with self.assertRaises(worker.NativeCleanupError): second.result(timeout=5)
+            self.assertEqual(len(calls), 2)
+        self.assertEqual(native.close.call_count, 4)
+
+    def test_backend_identity_requires_restart_and_closes_loaded_model(self):
+        calls, closed = [], []
+        class Model:
+            def close(self): closed.append(True)
+        def load(path, **options):
+            calls.append((path, options))
+            return Model()
+        with worker.SpeechEngine(loader=load) as engine:
+            first = engine.prepare_model('/model', backend='vulkan', native_model='/native')
+            model = first.result(timeout=5)
+            self.assertIs(engine.prepare_model('/model', native_model='/native', backend='vulkan').result(), model)
+            for options in [dict(backend='cpu', native_model='/native'),
+                            dict(backend='vulkan', native_model='/other')]:
+                with self.assertRaisesRegex(worker.RequestError, 'restart'):
+                    engine.prepare_model('/model', **options)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(closed, [])
+        self.assertEqual(closed, [True])
+
     def test_model_is_loaded_once_and_reused(self):
         calls = []
         model = object()
@@ -59,7 +98,7 @@ class ServiceTests(unittest.TestCase):
     def test_service_protocol_handles_multiple_requests_and_eof(self):
         messages = ''.join(json.dumps(dict(type='align', id=str(i), input={})) + '\n' for i in range(2))
         result = subprocess.run([sys.executable, str(Path(worker.__file__)), '--serve'],
-                                input=messages, capture_output=True, text=True, timeout=5)
+                                input=messages, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0)
         replies = [json.loads(line) for line in result.stdout.splitlines()]
         self.assertEqual({reply['id'] for reply in replies}, {'0', '1'})

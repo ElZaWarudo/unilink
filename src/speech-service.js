@@ -35,7 +35,7 @@ export class SpeechService {
   async openWorker() {
     const directory = await mkdtemp(join(tmpdir(), 'unilink-speech-service-'));
     try {
-      for (const name of ['worker.py', 'alignment.py']) {
+      for (const name of ['worker.py', 'alignment.py', 'backends.py']) {
         await writeFile(join(directory, name), await readFile(new URL(`./speech/${name}`, import.meta.url)));
       }
       if (this.closed) throw new Error('speech service closed');
@@ -153,6 +153,8 @@ export class SpeechService {
         mediaUrl: input.mediaUrl, subtitlePath, audioIndex: input.audioIndex,
         start: input.start, duration: input.duration, ffmpeg: this.paths.ffmpeg,
         ffprobe: this.paths.ffprobe, modelPath: resolve(this.paths.model),
+        backend: this.paths.backend || 'cpu', nativeExecutable: this.paths.nativeExecutable,
+        nativeModel: this.paths.nativeModel,
       } }) + '\n';
       if (Buffer.byteLength(message) > 32768) throw new Error('speech request too large');
       return await new Promise((resolveJob, reject) => {

@@ -967,6 +967,18 @@ export function configurationPage({
        <p class="section-index">Opcional / Audio y subtítulos en inglés</p>
        <h2>Sincronización por voz</h2>
        <p>Relaciona el diálogo con tus subtítulos. El audio se procesa en este PC.</p>
+       <div class="actions">
+         <label for="speech-backend">Motor de reconocimiento
+           <select id="speech-backend" data-speech-backend disabled>
+             <option value="cpu">CPU · faster-whisper</option>
+             <option value="cuda">NVIDIA CUDA · faster-whisper</option>
+             <option value="vulkan">GPU Vulkan · whisper.cpp</option>
+           </select>
+         </label>
+         <button type="button" class="secondary" data-speech-backend-apply disabled>Usar motor</button>
+       </div>
+       <p>Vulkan permite usar GPU AMD, Intel y NVIDIA compatibles. CUDA requiere una GPU NVIDIA con CUDA 12 y cuDNN 9 instalados. Si la GPU falla, la sincronización continúa por CPU.</p>
+       <p data-speech-backend-status role="status"></p>
        <p>La instalación descarga el motor y el modelo de inglés; necesita Internet, espacio libre y <a href="https://www.python.org/downloads/" target="_blank" rel="noopener noreferrer">Python 3.10 o posterior</a> instalado en el PC. Puede tardar varios minutos.</p>
        <p data-speech-setup-status role="status">Comprobando el motor local…</p>
        <button type="button" class="secondary" data-speech-setup-start disabled>Instalar motor de inglés</button>
@@ -1076,6 +1088,12 @@ export function configurationPage({
       const speech = document.querySelector('[data-speech-setup]');
       const speechState = speech.querySelector('[data-speech-setup-status]');
       const speechStart = speech.querySelector('[data-speech-setup-start]');
+      const speechBackend = speech.querySelector('[data-speech-backend]');
+      const speechApply = speech.querySelector('[data-speech-backend-apply]');
+      const speechBackendState = speech.querySelector('[data-speech-backend-status]');
+      const backendLabels = { cpu: 'CPU · faster-whisper', cuda: 'NVIDIA CUDA · faster-whisper', vulkan: 'GPU Vulkan · whisper.cpp' };
+      let savedBackend = null;
+      let speechBusy = false;
       let speechTimer;
       let speechGeneration = 0;
       const speechController = new AbortController();
@@ -1087,6 +1105,20 @@ export function configurationPage({
         return response.json();
       }
       function renderSpeech(value) {
+        const selected = value.requestedBackend ?? value.backend ?? 'cpu';
+        if (savedBackend === null || speechBackend.value === savedBackend) speechBackend.value = selected;
+        savedBackend = selected;
+        speechBusy = Boolean(value.busy);
+        speechBackend.disabled = speechBusy;
+        speechApply.disabled = speechBusy || speechBackend.value === savedBackend;
+        const actual = value.runtime?.backend;
+        let runtimeText = 'El motor en uso aparecerá al sincronizar.';
+        if (actual) {
+          runtimeText = (value.runtime.fallbackReason ? 'GPU no disponible; usando ' : 'En uso: ') + backendLabels[actual];
+          if (value.runtime.device) runtimeText += ' (' + value.runtime.device + ')';
+          runtimeText += '.';
+        }
+        speechBackendState.textContent = 'Seleccionado: ' + backendLabels[selected] + '. ' + runtimeText;
         speechState.textContent = value.message;
         speech.setAttribute('aria-busy', String(value.busy));
         speechStart.disabled = value.busy || value.state === 'ready';
@@ -1098,23 +1130,49 @@ export function configurationPage({
           const value = await speechRequest();
           if (speechController.signal.aborted || expected !== speechGeneration) return;
           renderSpeech(value);
-          if (value.busy) speechTimer = setTimeout(() => pollSpeech(expected), 2000);
+          speechTimer = setTimeout(() => pollSpeech(expected), value.busy ? 2000 : 5000);
         } catch {
           if (speechController.signal.aborted || expected !== speechGeneration) return;
           speechState.textContent = 'No se pudo comprobar la instalación. Reintentando…';
           speechTimer = setTimeout(() => pollSpeech(expected), 5000);
         }
       }
+      speechBackend.addEventListener('change', () => {
+        speechApply.disabled = speechBusy || speechBackend.value === savedBackend;
+      });
+      speechApply.addEventListener('click', async () => {
+        const expected = ++speechGeneration;
+        clearTimeout(speechTimer);
+        speechBackend.disabled = speechApply.disabled = speechStart.disabled = true;
+        speechBackendState.textContent = 'Cambiando motor…';
+        try {
+          const response = await fetch('/api/speech-backend', { method: 'POST',
+            headers: { 'x-unilink-token': speech.dataset.token, 'content-type': 'application/json' },
+            body: JSON.stringify({ backend: speechBackend.value }),
+            signal: AbortSignal.any([speechController.signal, AbortSignal.timeout(30000)]) });
+          if (!response.ok) throw new Error('backend');
+          const value = await response.json();
+          if (speechController.signal.aborted || expected !== speechGeneration) return;
+          savedBackend = null;
+          renderSpeech(value);
+          speechTimer = setTimeout(() => pollSpeech(expected), 5000);
+        } catch {
+          if (speechController.signal.aborted || expected !== speechGeneration) return;
+          speechBackendState.textContent = 'No se pudo confirmar el cambio. Comprobando el motor…';
+          pollSpeech(expected);
+        }
+      });
       speechStart.addEventListener('click', async () => {
         const expected = ++speechGeneration;
         clearTimeout(speechTimer);
         speechStart.disabled = true;
+        speechBackend.disabled = speechApply.disabled = true;
         speechState.textContent = 'Iniciando instalación…';
         try {
           const value = await speechRequest('POST');
           if (speechController.signal.aborted || expected !== speechGeneration) return;
           renderSpeech(value);
-          if (value.busy) speechTimer = setTimeout(() => pollSpeech(expected), 2000);
+          speechTimer = setTimeout(() => pollSpeech(expected), value.busy ? 2000 : 5000);
         } catch {
           if (speechController.signal.aborted || expected !== speechGeneration) return;
           speechState.textContent = 'Comprobando si la instalación comenzó…';

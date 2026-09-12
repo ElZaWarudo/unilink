@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve, delimiter } from "node:path";
 import { randomUUID } from "node:crypto";
 import { SpeechService } from "./speech-service.js";
+import { SPEECH_BACKENDS } from "./config.js";
 
 export function speechPaths(env = process.env) {
   const home = resolve(env.UNILINK_SUBTITLE_SYNC_HOME || join(homedir(), ".unilink", "subtitle-sync"));
@@ -12,6 +13,9 @@ export function speechPaths(env = process.env) {
   return {
     python: join(home, "venv", windows ? "Scripts/python.exe" : "bin/python"),
     model: join(home, "model"),
+    backend: "cpu",
+    nativeExecutable: join(home, "native", windows ? "unilink-whisper.exe" : "unilink-whisper"),
+    nativeModel: join(home, "ggml-base.en.bin"),
     ffmpeg: env.UNILINK_FFMPEG || (windows && stremio ? join(stremio, "ffmpeg.exe") : "ffmpeg"),
     ffprobe: env.UNILINK_FFPROBE || (windows && stremio ? join(stremio, "ffprobe.exe") : "ffprobe"),
   };
@@ -73,7 +77,7 @@ function runProcess(python, script, input, signal) {
 export async function runSpeech(input, signal, paths = speechPaths()) {
   const directory = await mkdtemp(join(tmpdir(), "unilink-speech-"));
   try {
-    for (const name of ["worker.py", "alignment.py"]) {
+    for (const name of ["worker.py", "alignment.py", "backends.py"]) {
       await writeFile(join(directory, name), await readFile(new URL(`./speech/${name}`, import.meta.url)));
     }
     const subtitlePath = join(directory, "source.vtt");
@@ -81,6 +85,7 @@ export async function runSpeech(input, signal, paths = speechPaths()) {
     return await runProcess(paths.python, join(directory, "worker.py"), {
       mediaUrl: input.mediaUrl, subtitlePath, audioIndex: input.audioIndex,
       start: input.start, duration: input.duration,
+      backend: paths.backend || "cpu", nativeExecutable: paths.nativeExecutable, nativeModel: paths.nativeModel,
       ffmpeg: await resolveExecutable(paths.ffmpeg), ffprobe: await resolveExecutable(paths.ffprobe), modelPath: resolve(paths.model),
     }, signal);
   } finally {
@@ -99,15 +104,16 @@ export function validCorrection(result, window) {
 }
 
 export class SubtitleSync {
-  constructor({ run, available = speechAvailable, timeoutMs = 180000, now = Date.now, maxConcurrent = 2 } = {}) {
-    this.service = run ? null : new SpeechService({ paths: speechPaths() });
+  constructor({ run, available, paths = speechPaths(), timeoutMs = 180000, now = Date.now, maxConcurrent = 2 } = {}) {
+    this.paths = { ...paths };
+    this.service = run ? null : new SpeechService({ paths: this.paths });
     this.run = run || (async (input, signal, progress) => {
       const paths = this.service.paths;
       paths.ffmpeg = await resolveExecutable(paths.ffmpeg);
       paths.ffprobe = await resolveExecutable(paths.ffprobe);
       return this.service.run(input, signal, progress);
     });
-    this.available = available;
+    this.available = available || (() => speechAvailable(this.paths));
     this.timeoutMs = timeoutMs;
     this.now = now;
     this.jobs = new Map();
@@ -143,7 +149,7 @@ export class SubtitleSync {
 
   start({ key, isCurrent, prepare, window, requestId }) {
     if (this.closed) return { state: "unavailable" };
-    if (this.releasing) return { state: "busy" };
+    if (this.releasing || this.changingBackend) return { state: "busy" };
     if (!isCurrent()) return { state: "stale" };
     for (const [id, job] of this.jobs) {
       if (!job.isCurrent() || this.now() - job.created > 600000) {
@@ -170,6 +176,11 @@ export class SubtitleSync {
         if (!job.controller.signal.aborted && ["extracting", "loading_model", "queued", "recognizing", "matching"].includes(stage)) job.stage = stage;
       });
       if (job.controller.signal.aborted || !isCurrent()) return;
+      if (SPEECH_BACKENDS.includes(outcome.metrics?.backend)) {
+        this.runtime = { backend: outcome.metrics.backend,
+          fallbackReason: ["cuda_unavailable", "cuda_failed", "vulkan_unavailable", "vulkan_failed"].includes(outcome.metrics.fallbackReason)
+            ? outcome.metrics.fallbackReason : null };
+      }
       if (outcome.state === "ready" && validCorrection(outcome.result, window)) {
         job.state = "ready";
         job.result = outcome.result;
@@ -191,11 +202,25 @@ export class SubtitleSync {
       for (const job of this.running) this.cancel(job.id);
       if (this.service) {
         await this.service.close();
-        if (!this.closed) this.service = new SpeechService({ paths: speechPaths() });
+        if (!this.closed) this.service = new SpeechService({ paths: this.paths });
       }
     })().finally(() => { this.releasing = null; });
     return this.releasing;
   }
 
   close() { this.closed = true; return this.release(); }
+
+  backendStatus() { return this.runtime ? { ...this.runtime } : null; }
+
+  async setBackend(backend) {
+    if (!SPEECH_BACKENDS.includes(backend)) throw new Error("invalid speech backend");
+    if (backend === (this.paths.backend || "cpu")) return;
+    this.changingBackend = true;
+    try {
+      await this.release();
+      this.paths.backend = backend;
+      this.runtime = null;
+      this.jobs.clear();
+    } finally { this.changingBackend = false; }
+  }
 }

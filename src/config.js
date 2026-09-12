@@ -10,6 +10,8 @@ export const DEFAULT_MARATHON_SETTINGS = {
   queueSize: 5,
 };
 
+export const SPEECH_BACKENDS = ["cpu", "cuda", "vulkan"];
+
 export function normalizeTorrentioManifestUrl(input) {
   const value = String(input ?? "").trim();
   if (!value) {
@@ -100,6 +102,7 @@ export class ConfigStore {
       const content = await readFile(this.path, "utf8");
       const parsed = JSON.parse(content);
       const config = {};
+      if (SPEECH_BACKENDS.includes(parsed.speechBackend)) config.speechBackend = parsed.speechBackend;
       if (typeof parsed.stremioAuthKey === "string" && parsed.stremioAuthKey.length <= 4096) {
         config.stremioAuthKey = parsed.stremioAuthKey;
       }
@@ -144,6 +147,7 @@ export class ConfigStore {
     const current = await this.load();
     const merged = { ...current, ...config };
     const normalized = {};
+    if (SPEECH_BACKENDS.includes(merged.speechBackend)) normalized.speechBackend = merged.speechBackend;
     if (typeof merged.stremioAuthKey === "string" && merged.stremioAuthKey.length <= 4096) {
       normalized.stremioAuthKey = merged.stremioAuthKey;
     }

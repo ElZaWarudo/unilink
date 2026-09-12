@@ -2,6 +2,8 @@ import { spawn, execFile } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { speechAvailable, speechPaths } from "./subtitle-sync.js";
+import { installNative, nativeInstalled } from "./speech-native.js";
+import { SPEECH_BACKENDS } from "./config.js";
 
 function runSetupProcess(command, args, signal) {
   return new Promise((resolve, reject) => {
@@ -42,26 +44,37 @@ function failureMessage(state, aborted) {
 
 export class SpeechSetup {
   constructor({ paths = speechPaths(), python = process.env.UNILINK_SETUP_PYTHON || (process.platform === "win32" ? "python" : "python3"),
-    run = runSetupProcess, available = () => speechAvailable(paths), makeDirectory = mkdir, timeoutMs = 20 * 60_000 } = {}) {
-    Object.assign(this, { paths, python, run, available, makeDirectory, timeoutMs });
+    run = runSetupProcess, available = () => speechAvailable(paths), makeDirectory = mkdir,
+    installNativeImpl = installNative, nativeAvailable = nativeInstalled, timeoutMs = 20 * 60_000 } = {}) {
+    Object.assign(this, { paths: { ...paths }, python, run, available, makeDirectory, installNativeImpl, nativeAvailable, timeoutMs });
     this.result = { state: "idle", message: "Instala el motor local para sincronizar audio y subtítulos en inglés." };
     this.task = null;
     this.closed = false;
     this.probeController = new AbortController();
+    this.pendingReadiness = new Set();
   }
 
   async status() {
+    const probeController = this.probeController;
     if (!this.closed && !this.task && this.result.state === "idle") {
-      this.readiness ??= (async () => {
-        if (!await this.available()) return false;
-        try { await this.probe(this.probeController.signal); return true; } catch { return false; }
-      })();
+      if (!this.readiness) {
+        this.readiness = (async () => {
+          if (!await this.available()) return false;
+          try {
+            await this.probe(probeController.signal);
+            return this.paths.backend !== "vulkan" || await this.nativeAvailable(this.paths);
+          } catch { return false; }
+        })();
+        const pending = this.readiness;
+        this.pendingReadiness.add(pending);
+        pending.then(() => this.pendingReadiness.delete(pending), () => this.pendingReadiness.delete(pending));
+      }
       const ready = await this.readiness;
-      if (ready && !this.closed && !this.task && this.result.state === "idle") {
+      if (ready && probeController === this.probeController && !this.closed && !this.task && this.result.state === "idle") {
         this.result = { state: "ready", message: "Motor de inglés disponible. Activa Auto-sync inglés en el reproductor." };
       }
     }
-    return { ...this.result, busy: Boolean(this.task) };
+    return { ...this.result, backend: this.paths.backend || "cpu", busy: Boolean(this.task) };
   }
 
   start() {
@@ -78,13 +91,18 @@ export class SpeechSetup {
   }
 
   async install(signal) {
+    let existingReady = false;
     if (await this.available()) {
       try {
         await this.probe(signal);
-        signal.throwIfAborted();
-        this.result = { state: "ready", message: "Motor de inglés disponible. Activa Auto-sync inglés en el reproductor." };
-        return;
+        existingReady = true;
       } catch { signal.throwIfAborted(); /* Repair an incomplete existing environment. */ }
+    }
+    if (existingReady) {
+      await this.installSelected(signal);
+      signal.throwIfAborted();
+      this.result = { state: "ready", message: "Motor de inglés disponible. Activa Auto-sync inglés en el reproductor." };
+      return;
     }
     const step = async (state, command, args) => {
       signal.throwIfAborted();
@@ -101,6 +119,7 @@ export class SpeechSetup {
     this.result = { state: "verifying", message: MESSAGES.verifying };
     if (!await this.available()) throw new Error("unavailable");
     await this.probe(signal);
+    await this.installSelected(signal);
     signal.throwIfAborted();
     this.result = { state: "ready", message: "Motor de inglés instalado. Activa Auto-sync inglés en el reproductor." };
   }
@@ -118,9 +137,33 @@ export class SpeechSetup {
     } finally { clearTimeout(timeout); }
   }
 
+  async installSelected(signal) {
+    if (this.paths.backend === "vulkan") {
+      this.result = { state: "model", message: "Instalando whisper.cpp y su modelo de inglés…" };
+      await this.installNativeImpl(this.paths, signal);
+    }
+  }
+
+  async setBackend(backend) {
+    if (!SPEECH_BACKENDS.includes(backend)) throw new Error("invalid speech backend");
+    if (backend === (this.paths.backend || "cpu")) return;
+    if (this.task || this.closed) throw new Error("speech setup busy");
+    this.probeController.abort();
+    this.probeController = new AbortController();
+    this.paths.backend = backend;
+    this.readiness = null;
+    this.result = { state: "idle", message: backend === "vulkan"
+      ? "Instala whisper.cpp para usar Vulkan. Si falla, Auto-sync usará CPU."
+      : backend === "cuda" ? "CUDA requiere NVIDIA, CUDA 12 y cuDNN 9 en el PC. Si no están disponibles, Auto-sync usará CPU."
+        : "Motor CPU seleccionado." };
+  }
+
   close() {
+    if (this.closing) return this.closing;
     this.closed = true;
     this.probeController.abort();
     this.controller?.abort();
+    this.closing = Promise.allSettled([this.task, ...this.pendingReadiness]).then(() => {});
+    return this.closing;
   }
 }
