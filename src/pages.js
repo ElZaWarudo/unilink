@@ -174,7 +174,7 @@ function layout(
       background: var(--signal);
       box-shadow: 0 0 0 4px rgb(108 229 189 / .09);
     }
-    main { padding: var(--space-7) 0 var(--space-9); }
+    main { padding: var(--space-7) 0 var(--space-8); }
     .page-intro { max-width: 760px; }
     .eyebrow,
     .section-index {
@@ -240,6 +240,8 @@ function layout(
     input:focus-visible, select:focus-visible {
       border-color: var(--signal);
       box-shadow: 0 0 0 3px rgb(108 229 189 / .18);
+      outline: 2px solid var(--signal);
+      outline-offset: 3px;
     }
     .fields {
       display: grid;
@@ -500,6 +502,7 @@ function layout(
       margin-right: var(--space-2);
       color: var(--signal);
     }
+    .playback-status span:empty { display: none; }
     .player {
       position: relative;
       overflow: hidden;
@@ -512,6 +515,7 @@ function layout(
       outline: 3px solid rgb(108 229 189 / .55);
       outline-offset: 3px;
     }
+    .player-surface { position: relative; }
     .player video {
       display: block;
       width: 100%;
@@ -526,7 +530,7 @@ function layout(
       position: absolute;
       z-index: 2;
       left: 50%;
-      bottom: 104px;
+      bottom: calc(var(--controls-height, 180px) + 12px);
       width: max-content;
       max-width: min(84%, 920px);
       transform: translateX(-50%);
@@ -558,6 +562,16 @@ function layout(
       text-align: center;
       pointer-events: none;
     }
+    .player.has-playback-error video { display: none; }
+    .player.has-playback-error .player-caption { display: none; }
+    .player.has-playback-error .player-message {
+      position: relative;
+      inset: auto;
+      width: auto;
+      transform: none;
+      margin: var(--space-3);
+    }
+    .player.has-playback-error .player-controls { position: relative; }
     .player-seek-feedback {
       position: absolute;
       z-index: 3;
@@ -629,11 +643,11 @@ function layout(
     }
     .player-control-row .control-spacer { flex: 1; }
     .player-sync-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 8px; }
-    .player-sync-row [role="status"] { flex: 1 1 170px; min-width: 0; font-size: 12px; line-height: 1.4; color: var(--quiet); }
+    .player-sync-row [role="status"] { flex: 1 1 170px; min-width: 0; font-size: 12px; line-height: 1.4; color: var(--muted); }
     .player-sync-row button { font-size: 12px; }
     .player-controls button {
       min-width: 44px;
-      min-height: 40px;
+      min-height: 44px;
       border-color: transparent;
       background: transparent;
       color: var(--text);
@@ -674,6 +688,7 @@ function layout(
       height: 100%;
       border-radius: 0;
     }
+    .player:fullscreen:not(.has-playback-error) .player-surface { height: 100%; }
     .player:fullscreen video {
       width: 100%;
       height: 100%;
@@ -826,11 +841,21 @@ function layout(
       .player { border-radius: var(--radius-sm); }
       .player video { min-height: 0; max-height: 68vh; }
       .player-caption {
-        bottom: 98px;
+        bottom: calc(var(--controls-height, 220px) + 12px);
         max-width: 90%;
         font-size: 1rem;
       }
       .player-controls { padding: var(--space-2); }
+      .player:not(:fullscreen) .player-controls { position: relative; }
+      .player:not(:fullscreen).is-controls-hidden .player-controls {
+        visibility: visible;
+        transform: none;
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .player:not(:fullscreen) .player-caption { bottom: 14px; }
+      .player-control-row { flex-wrap: wrap; }
+      .marathon-item-actions button { min-height: 44px; min-width: 44px; }
       .player-volume { display: none; }
       .player-audio { max-width: 48%; }
       .player-clock { font-size: .66rem; }
@@ -883,6 +908,7 @@ export function configurationPage({
   saved = false,
   error = "",
   manifestUrl,
+  watchUrl = "/watch",
 }) {
   let message = "";
   if (error) {
@@ -896,10 +922,10 @@ export function configurationPage({
     `<div class="page-intro">
        <p class="eyebrow">01 / Fuente de streaming</p>
        <h1>Conecta la fuente.</h1>
-       <p class="lede">Pega el manifest que ya utilizas en Torrentio. Unilink solo lo guarda en este ordenador para añadir la acción «Servir en red».</p>
+       <p class="lede">Pega el manifest que ya utilizas en Torrentio. Unilink lo guarda en este ordenador y añade fuentes marcadas como «Unilink» en Stremio.</p>
      </div>
      ${message}
-     <form class="workbench" method="post" action="/configure">
+     <form class="workbench" method="post" action="/configure" data-configuration-form>
        <div class="field">
          <label for="torrentioManifestUrl">Manifest de Torrentio</label>
          <input id="torrentioManifestUrl" name="torrentioManifestUrl" type="url" required
@@ -913,10 +939,28 @@ export function configurationPage({
          <button type="submit">Guardar fuente</button>
          <a class="button secondary" href="${escapeHtml(manifestUrl.replace(/^http/, "stremio"))}">Instalar addon en Stremio</a>
        </div>
+       <p data-configuration-status role="status" aria-live="polite"></p>
      </form>
+     <section class="workbench" aria-labelledby="nextSteps">
+       <p class="section-index">02 / Segunda pantalla</p>
+       <h2 id="nextSteps">Continúa en el otro dispositivo</h2>
+       <ol class="relay-steps">
+         <li>Guarda la fuente e instala el addon en Stremio.</li>
+         <li>Abre una película o episodio y elige una fuente marcada como «Unilink».</li>
+         <li>Abre esta dirección en un dispositivo de la misma red. Mantén Stremio y Unilink abiertos en el PC.</li>
+       </ol>
+       <div class="route">
+         <label class="sr-only" for="watchUrl">Dirección de la segunda pantalla</label>
+         <input id="watchUrl" type="text" readonly value="${escapeHtml(watchUrl)}">
+         <button class="secondary" id="copyWatchUrl" type="button">Copiar URL</button>
+       </div>
+       <p id="copyStatus" class="copy-status" role="status"></p>
+       <div class="actions"><a class="button secondary" href="${escapeHtml(watchUrl)}">Abrir reproductor</a></div>
+     </section>
      <section class="workbench" data-stremio-settings data-token="${escapeHtml(stremioToken)}">
+       <p class="section-index">Opcional</p>
        <h2>Progreso en Stremio</h2>
-       <p>Conecta tu cuenta una vez. Después, el progreso se guarda automáticamente mientras ves contenido en Unilink.</p>
+       <p>Puedes ver contenido sin conectar una cuenta. Conéctala si también quieres guardar el progreso en Stremio.</p>
        <p data-stremio-state role="status">Comprobando conexión…</p>
        <div class="actions">
          <button type="button" data-stremio-connect disabled>Conectar Stremio</button>
@@ -924,8 +968,41 @@ export function configurationPage({
          <a data-stremio-link target="_blank" rel="noopener noreferrer" hidden>Continuar en Stremio</a>
        </div>
      </section>
+     <section class="workbench" id="speech-setup" data-speech-setup data-token="${escapeHtml(stremioToken)}">
+       <p class="section-index">Opcional / Audio y subtítulos en inglés</p>
+       <h2>Sincronización por voz</h2>
+       <p>Relaciona el diálogo con tus subtítulos. El audio se procesa en este PC.</p>
+       <p>La instalación descarga el motor y el modelo de inglés; necesita Internet, espacio libre y <a href="https://www.python.org/downloads/" target="_blank" rel="noopener noreferrer">Python 3.10 o posterior</a> instalado en el PC. Puede tardar varios minutos.</p>
+       <p data-speech-setup-status role="status">Comprobando el motor local…</p>
+       <button type="button" class="secondary" data-speech-setup-start disabled>Instalar motor de inglés</button>
+     </section>
      <p class="endpoint-note">Endpoint local · <code>${escapeHtml(manifestUrl)}</code></p>`,
     `(() => {
+      const configuration = document.querySelector('[data-configuration-form]');
+      const configurationStatus = configuration.querySelector('[data-configuration-status]');
+      configuration.addEventListener('submit', async event => {
+        event.preventDefault();
+        const save = configuration.querySelector('[type="submit"]');
+        if (save.disabled) return;
+        save.disabled = true;
+        configurationStatus.textContent = 'Guardando fuente…';
+        try {
+          const response = await fetch('/configure', { method: 'POST', headers: { accept: 'application/json' },
+            body: new URLSearchParams(new FormData(configuration)), signal: AbortSignal.timeout(15000) });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || 'No se pudo guardar la fuente.');
+          configurationStatus.textContent = 'Fuente guardada. Instala o actualiza el addon y elige una fuente Unilink en Stremio.';
+        } catch (error) {
+          configurationStatus.textContent = error.name === 'TimeoutError' ? 'No se pudo confirmar el guardado. Vuelve a intentarlo.' : error.message;
+        } finally { save.disabled = false; }
+      });
+      document.querySelector('#copyWatchUrl').addEventListener('click', async () => {
+        const input = document.querySelector('#watchUrl');
+        let copied = false;
+        try { await navigator.clipboard.writeText(input.value); copied = true; }
+        catch { input.select(); copied = document.execCommand('copy'); }
+        document.querySelector('#copyStatus').textContent = copied ? 'Dirección copiada.' : 'Selecciona la dirección y cópiala manualmente.';
+      });
       const root = document.querySelector('[data-stremio-settings]');
       const state = root.querySelector('[data-stremio-state]');
       const connect = root.querySelector('[data-stremio-connect]');
@@ -1001,6 +1078,57 @@ export function configurationPage({
         state.textContent = 'No se pudo comprobar la conexión. Puedes reintentar.';
       });
       window.addEventListener('pagehide', () => { generation++; clearTimeout(timer); });
+      const speech = document.querySelector('[data-speech-setup]');
+      const speechState = speech.querySelector('[data-speech-setup-status]');
+      const speechStart = speech.querySelector('[data-speech-setup-start]');
+      let speechTimer;
+      let speechGeneration = 0;
+      const speechController = new AbortController();
+      async function speechRequest(method = 'GET') {
+        const response = await fetch('/api/speech-setup', { method,
+          headers: { 'x-unilink-token': speech.dataset.token },
+          signal: AbortSignal.any([speechController.signal, AbortSignal.timeout(15000)]) });
+        if (!response.ok) throw new Error('setup');
+        return response.json();
+      }
+      function renderSpeech(value) {
+        speechState.textContent = value.message;
+        speech.setAttribute('aria-busy', String(value.busy));
+        speechStart.disabled = value.busy || value.state === 'ready';
+        const labels = { ready: 'Motor disponible', error: 'Reintentar instalación' };
+        speechStart.textContent = value.busy ? 'Instalación en curso…' : labels[value.state] ?? 'Instalar motor de inglés';
+      }
+      async function pollSpeech(expected) {
+        try {
+          const value = await speechRequest();
+          if (speechController.signal.aborted || expected !== speechGeneration) return;
+          renderSpeech(value);
+          if (value.busy) speechTimer = setTimeout(() => pollSpeech(expected), 2000);
+        } catch {
+          if (speechController.signal.aborted || expected !== speechGeneration) return;
+          speechState.textContent = 'No se pudo comprobar la instalación. Reintentando…';
+          speechTimer = setTimeout(() => pollSpeech(expected), 5000);
+        }
+      }
+      speechStart.addEventListener('click', async () => {
+        const expected = ++speechGeneration;
+        clearTimeout(speechTimer);
+        speechStart.disabled = true;
+        speechState.textContent = 'Iniciando instalación…';
+        try {
+          const value = await speechRequest('POST');
+          if (speechController.signal.aborted || expected !== speechGeneration) return;
+          renderSpeech(value);
+          if (value.busy) speechTimer = setTimeout(() => pollSpeech(expected), 2000);
+        } catch {
+          if (speechController.signal.aborted || expected !== speechGeneration) return;
+          speechState.textContent = 'Comprobando si la instalación comenzó…';
+          pollSpeech(expected);
+        }
+      });
+      pollSpeech(speechGeneration);
+      window.addEventListener('pagehide', () => { clearTimeout(speechTimer); speechController.abort(); });
+      window.addEventListener('pageshow', event => { if (event.persisted) location.reload(); });
     })();`,
     "configure",
   );
@@ -1009,6 +1137,8 @@ export function configurationPage({
 export function activationPage({
   watchUrl,
   active,
+  serverInstanceId = "",
+  preparing = false,
   subtitleWarning = "",
   settingsSaved = false,
 }) {
@@ -1051,6 +1181,8 @@ export function activationPage({
     .join("");
   const settingsPanel = subtitleCount
     ? `<form method="post" action="/settings" data-subtitle-settings>
+         <input type="hidden" name="serverInstanceId" value="${escapeHtml(serverInstanceId)}">
+         <input type="hidden" name="version" value="${escapeHtml(active.version)}">
          <div class="fields">
            <div class="field">
              <label for="subtitleLanguage">Idioma preferido</label>
@@ -1146,6 +1278,10 @@ export function activationPage({
            headers:{accept:"application/json"},
            body:new URLSearchParams(new FormData(settingsForm))
          });
+         if(response.status===409){
+           settingsStatus.textContent="La fuente ha cambiado. Abre la emisión actual antes de aplicar ajustes.";
+           return;
+         }
          if(!response.ok)throw new Error("HTTP "+response.status);
          settingsStatus.textContent="Subtítulos actualizados en el reproductor activo.";
        }catch{
@@ -1175,7 +1311,9 @@ export function activationPage({
        <p class="stream-title">${escapeHtml(presentation.title)}</p>
        ${presentation.details ? `<p class="stream-data">${escapeHtml(presentation.details)}</p>` : ""}
      </div>
+     ${preparing ? '<p class="notice" role="status" data-preparation-state>Preparando subtítulos y siguientes episodios… Ya puedes abrir el reproductor.</p>' : ""}
      ${subtitleWarning ? `<p class="notice error">${escapeHtml(subtitleWarning)}</p>` : ""}
+     <p><a href="/session">Ver la emisión actual</a> · <a href="/configure">Configuración</a></p>
      ${settingsSaved ? '<p class="notice" role="status">Subtítulos actualizados en el reproductor activo.</p>' : ""}
      <section class="activation-layout" aria-label="Control de emisión">
        <div class="handoff">
@@ -1200,15 +1338,39 @@ export function activationPage({
        </aside>
      </section>
      <p class="completion-note">El torrent arranca cuando la segunda pantalla solicita el vídeo. Esta pestaña puede cerrarse después.</p>`,
-    copyScript,
+    copyScript + (preparing ? `
+      (() => {
+        let stopped = false;
+        let timer;
+        const controller = new AbortController();
+        async function pollPreparation() {
+          try {
+            const response = await fetch('/api/status', { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]) });
+            if (!response.ok) throw new Error('status');
+            const status = await response.json();
+            if (stopped) return;
+            if (status.serverInstanceId !== ${JSON.stringify(serverInstanceId)} || status.version !== ${Number(active.version)}) {
+              document.querySelector('[data-preparation-state]').textContent = 'La fuente ha cambiado. Abre la emisión actual para continuar.';
+              return;
+            }
+            if (!status.preparing) { location.replace('/session'); return; }
+          } catch {
+            if (stopped) return;
+            document.querySelector('[data-preparation-state]').textContent = 'No se pudo comprobar la preparación. Reintentando…';
+          }
+          timer = setTimeout(pollPreparation, 2000);
+        }
+        window.addEventListener('pagehide', () => { stopped = true; clearTimeout(timer); controller.abort(); });
+        window.addEventListener('pageshow', event => { if (event.persisted) location.replace('/session'); });
+        pollPreparation();
+      })();` : ""),
     "activation",
   );
 }
 
 function marathonPanel(marathon) {
-  if (!marathon?.active) {
-    return "";
-  }
+  const visible = Boolean(marathon?.active);
+  marathon ??= {};
   const items = marathon.items ?? [];
   const queue = items
     .map((item, index) => {
@@ -1237,16 +1399,13 @@ function marathonPanel(marathon) {
       </li>`;
     })
     .join("");
-  const empty = items.length
-    ? ""
-    : '<p class="marathon-empty" data-marathon-empty>No hay más episodios preparados.</p>';
   const warning = marathon.warning
     ? `<p class="marathon-warning" data-marathon-warning role="status">${escapeHtml(marathon.warning)}</p>`
     : '<p class="marathon-warning" data-marathon-warning role="status" hidden></p>';
   const autoplayLabel = marathon.autoplay
     ? "Parar después de este episodio"
     : "Activar reproducción automática";
-  return `<section class="marathon-panel" data-marathon aria-labelledby="marathonTitle">
+  return `<section class="marathon-panel" data-marathon aria-labelledby="marathonTitle" ${visible ? "" : "hidden"}>
     <div class="marathon-head">
       <div>
         <p class="section-index">Maratón de serie</p>
@@ -1262,8 +1421,9 @@ function marathonPanel(marathon) {
       </div>
     </div>
     ${warning}
+    <p data-marathon-operation role="status" aria-live="polite"></p>
+    <button class="secondary" type="button" data-marathon-action="undo" ${marathon.canUndo ? "" : "hidden"}>Deshacer última eliminación</button>
     <ol class="marathon-list" data-marathon-list>${queue}</ol>
-    ${empty}
     <div class="marathon-countdown" data-marathon-countdown role="status"
       aria-live="assertive" hidden>
       <p data-marathon-countdown-text></p>
@@ -1294,9 +1454,13 @@ export function subtitleSelection(active) {
         ? languageFallback
         : 0;
   const subtitle = subtitles[index];
+  const sourceNumber = subtitle ? subtitles.slice(0, index + 1).filter(track => track.language === subtitle.language).length : 0;
   return {
     index,
     subtitle,
+    status: subtitle
+      ? `Subtítulos: ${subtitle.label} · fuente ${sourceNumber}`
+      : active?.preparing ? "Buscando subtítulos…" : "Sin subtítulos",
     url: subtitle
       ? `/subtitle/${index}.vtt?version=${active.version}&delay=0`
       : "",
@@ -1318,11 +1482,33 @@ export function watchPage({
          <p class="lede">Esta pantalla se conectará automáticamente cuando prepares una fuente desde el ordenador.</p>
          <ol class="relay-steps">
            <li>Abre una película o episodio en Stremio.</li>
-           <li>Elige una fuente marcada como «Servir en red».</li>
+           <li>Elige una fuente marcada como «Unilink».</li>
            <li>La reproducción aparecerá aquí sin cambiar de dirección.</li>
          </ol>
+         <p data-waiting-status></p>
        </section>`,
-      `setTimeout(() => location.reload(), 3000);`,
+      `(() => {
+        let stopped = false;
+        let timer;
+        const controller = new AbortController();
+        async function poll() {
+          try {
+            const response = await fetch('/api/status', { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]) });
+            if (!response.ok) throw new Error('status');
+            const status = await response.json();
+            if (stopped) return;
+            if (status.active) { location.reload(); return; }
+            document.querySelector('[data-waiting-status]').textContent = '';
+          } catch {
+            if (stopped) return;
+            document.querySelector('[data-waiting-status]').textContent = 'No se puede conectar con el PC. Comprueba que Unilink siga abierto; reintentando…';
+          }
+          timer = setTimeout(poll, 3000);
+        }
+        window.addEventListener('pagehide', () => { stopped = true; clearTimeout(timer); controller.abort(); });
+        window.addEventListener('pageshow', event => { if (event.persisted) location.reload(); });
+        poll();
+      })();`,
       "watch waiting",
     );
   }
@@ -1330,22 +1516,11 @@ export function watchPage({
   const presentation = streamPresentation(active);
   const subtitles = active.subtitles ?? [];
   const {
-    index: selectedSubtitleIndex,
     subtitle: selectedSubtitle,
     url: subtitleUrl,
+    status: subtitleStatus,
   } = subtitleSelection(active);
   const subtitleDelay = active.playbackSettings?.subtitleDelay ?? 0;
-  const selectedSourceNumber = selectedSubtitle
-    ? subtitles
-        .slice(0, selectedSubtitleIndex + 1)
-        .filter(
-          (subtitle) =>
-            subtitle.language === selectedSubtitle.language,
-        ).length
-    : 0;
-  const subtitleStatus = selectedSubtitle
-    ? `Subtítulos: ${escapeHtml(selectedSubtitle.label)} · fuente ${selectedSourceNumber}`
-    : "Sin subtítulos";
   const resumeKey = playbackIdentity(active);
   return layout(
     presentation.title,
@@ -1357,10 +1532,10 @@ export function watchPage({
        </div>
        <div class="playback-status" aria-label="Estado de la reproducción">
          <span>Directo desde el host</span>
-         <span>Audio compatible</span>
-         <span>${subtitleStatus}</span>
+         <span data-subtitle-status role="status">${escapeHtml(subtitleStatus)}</span>
          <span data-subtitle-delay-state>Sincronización ${formatSubtitleDelay(subtitleDelay)}</span>
-         <span data-stremio-progress role="status">Progreso guardado en este navegador</span>
+         <span data-local-progress role="status">El progreso se guardará en este navegador.</span>
+         <span data-stremio-progress role="status"></span>
        </div>
      </div>
      <div class="player"
@@ -1376,12 +1551,14 @@ export function watchPage({
        data-progress-token="${escapeHtml(progressToken)}"
        tabindex="0"
        aria-label="Reproductor de ${escapeHtml(presentation.title)}">
+       <div class="player-surface">
        <video controls playsinline preload="metadata"
          aria-label="Vídeo de ${escapeHtml(presentation.title)}"></video>
        <p class="player-caption" data-player-part="caption" aria-hidden="true" hidden></p>
        <p class="player-message" data-player-part="message" role="status" aria-live="polite" hidden></p>
        <p class="player-seek-feedback" data-player-part="seek-feedback"
          role="status" aria-live="polite" aria-atomic="true"></p>
+       </div>
        <div class="player-controls" aria-label="Controles de reproducción">
          <div class="player-timeline">
            <label class="sr-only" for="playerSeek">Posición del vídeo</label>
@@ -1410,9 +1587,11 @@ export function watchPage({
              aria-label="Pantalla completa" title="Pantalla completa (F)">⛶</button>
          </div>
          <div class="player-sync-row">
+           <button data-player-control="subtitle-retry" type="button" hidden>Reintentar subtítulos</button>
            <button data-player-control="subtitle-sync" type="button" aria-pressed="false"
              aria-describedby="subtitleSyncStatus" disabled>Auto-sync inglés</button>
            <span id="subtitleSyncStatus" data-player-part="subtitle-sync-status" role="status" aria-live="polite">Requiere subtítulos y audio en inglés</span>
+           <a href="/configure#speech-setup">Configurar en el PC</a>
          </div>
        </div>
        </div>

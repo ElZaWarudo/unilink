@@ -80,6 +80,8 @@ test("identifica idiomas y distingue varias pistas del mismo idioma", () => {
   assert.equal(audioTrackLabel({ lang: "spa", name: "spa" }, 0), "Español · Pista 1");
   assert.equal(audioTrackLabel({ lang: "spa", name: "Comentarios" }, 1), "Español · Comentarios · Pista 2");
   assert.equal(audioTrackLabel({}, 0), "Pista 1");
+  assert.equal(audioTrackLabel({ lang: "und", name: "und" }, 0), "Pista 1");
+  assert.equal(audioTrackLabel({ lang: "unknown" }, 0), "Pista 1");
 });
 
 test("recuerda la pista por idioma y nombre sin reutilizar índices de otro episodio", () => {

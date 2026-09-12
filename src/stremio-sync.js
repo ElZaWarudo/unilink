@@ -95,10 +95,15 @@ export class StremioSync {
   async report(active, progress, isCurrent = () => true) {
     const { type, id } = active?.unilinkContent ?? {};
     const { time, duration } = progress;
-    if (!["movie", "series"].includes(type) || typeof id !== "string" ||
-        !/^tt\d+(?::\d+:\d+)?$/.test(id) ||
-        !Number.isFinite(time) || !Number.isFinite(duration) || duration <= 0 ||
+    if (!Number.isFinite(time) || !Number.isFinite(duration) || duration <= 0 ||
         duration > 7 * 86400 || time < 0 || time > duration + 1) return { state: "invalid" };
+    if (!["movie", "series"].includes(type) || typeof id !== "string" ||
+        !/^tt\d+(?::\d+:\d+)?$/.test(id)) return { state: "unsupported" };
+    if (!isCurrent()) return { state: "stale" };
+    const initialGeneration = this.generation;
+    const config = await this.configStore.load();
+    if (!config.stremioAuthKey) return { state: "disconnected" };
+    if (initialGeneration !== this.generation || !isCurrent()) return { state: "stale" };
     if (this.busy) {
       // Keep only the latest update while the server finishes its current write.
       // This survives the browser closing after its keepalive request is accepted.

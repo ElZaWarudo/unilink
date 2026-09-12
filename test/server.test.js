@@ -41,6 +41,61 @@ async function fixture(options = {}) {
   };
 }
 
+test("speech installation requires the host configuration token and same origin", async (t) => {
+  let starts = 0;
+  let closes = 0;
+  const app = await fixture({ speechSetup: {
+    status: async () => ({ state: "idle", busy: false, message: "Ready to install" }),
+    start: () => { starts++; return { state: "checking", busy: true, message: "Checking" }; },
+    close: () => { closes++; },
+  } });
+  const html = await (await fetch(`${app.baseUrl}/configure`)).text();
+  const token = html.match(/data-speech-setup data-token="([^"]+)"/)[1];
+  const send = headers => fetch(`${app.baseUrl}/api/speech-setup`, { method: "POST", headers });
+  assert.equal((await send({})).status, 403);
+  assert.equal((await send({ "x-unilink-token": token, origin: "https://foreign.example" })).status, 403);
+  assert.equal(starts, 0);
+  const response = await send({ "x-unilink-token": token });
+  assert.equal(response.status, 202);
+  assert.equal(response.headers.get("access-control-allow-origin"), null);
+  assert.equal((await response.json()).busy, true);
+  assert.equal(starts, 1);
+  await app.close();
+  assert.equal(closes, 1);
+});
+
+test("configuration reports JSON save results and preserves the previous URL on invalid input", async (t) => {
+  const app = await fixture();
+  t.after(app.close);
+  const save = value => fetch(`${app.baseUrl}/configure`, { method: "POST", headers: { accept: "application/json" },
+    body: new URLSearchParams({ torrentioManifestUrl: value }) });
+  const valid = "https://torrentio.strem.fun/manifest.json";
+  const success = await save(valid);
+  assert.equal(success.status, 200);
+  assert.deepEqual(await success.json(), { saved: true });
+  const failure = await save("https://example.com/not-a-manifest");
+  assert.equal(failure.status, 400);
+  assert.match((await failure.json()).error, /manifest/);
+  assert.equal((await app.configStore.load()).torrentioManifestUrl, valid);
+});
+
+async function sessionForm(app, values) {
+  const status = await fetch(`${app.baseUrl}/api/status`).then(r => r.json());
+  const form = new URLSearchParams(values);
+  form.set("version", String(status.version));
+  form.set("serverInstanceId", status.serverInstanceId);
+  return form;
+}
+
+async function preparedStatus(app) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const status = await fetch(`${app.baseUrl}/api/status`).then(r => r.json());
+    if (!status.preparing) return status;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error("Preparation did not finish");
+}
+
 test("browser progress updates Stremio and rejects stale players and cross-origin account access", async (t) => {
   const writes = [];
   const app = await fixture({ fetchImpl: async (url, options) => {
@@ -154,6 +209,7 @@ test("expone un manifest instalable y CORS", async (t) => {
     Buffer.byteLength(JSON.stringify(manifest)),
   );
   assert.equal(manifest.id, "community.unilink.local");
+  assert.equal(manifest.version, "0.2.0");
   assert.deepEqual(manifest.resources, ["stream"]);
   assert.deepEqual(manifest.types, ["movie", "series"]);
   assert.equal(manifest.configurable, true);
@@ -204,7 +260,7 @@ test("configura el delay solo desde el host y sirve un reproductor autocontenido
   const settings = await fetch(`${app.baseUrl}/settings`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: "subtitleLanguage=es&subtitleId=es-1&subtitleDelay=0.05",
+    body: await sessionForm(app, "subtitleLanguage=es&subtitleId=es-1&subtitleDelay=0.05"),
   });
   const settingsHtml = await settings.text();
   assert.equal(settings.status, 200);
@@ -298,6 +354,7 @@ test("activa una fuente y la página fija contiene un reproductor", async (t) =>
 
   const activation = await fetch(`${app.baseUrl}/activate/${id}`);
   assert.equal(activation.status, 200);
+  await preparedStatus(app);
 
   const watch = await fetch(`${app.baseUrl}/watch`);
   const html = await watch.text();
@@ -362,7 +419,8 @@ test("carga automáticamente subtítulos de Stremio para el torrent activo", asy
   const activation = await fetch(
     `${app.baseUrl}/activate/candidate-1`,
   );
-  const activationHtml = await activation.text();
+  await preparedStatus(app);
+  const activationHtml = await fetch(`${app.baseUrl}/session`).then(r => r.text());
   assert.match(activationHtml, /3 pistas automáticas disponibles/);
   assert.match(activationHtml, /name="subtitleLanguage"/);
   assert.match(activationHtml, /name="subtitleId"/);
@@ -394,6 +452,8 @@ test("carga automáticamente subtítulos de Stremio para el torrent activo", asy
         fields.set("subtitleLanguage", "es");
         fields.set("subtitleId", "subtitle-es-2");
         fields.set("subtitleDelay", "1.5");
+        fields.set("version", String(app.registry.active.version));
+        fields.set("serverInstanceId", activationHtml.match(/name="serverInstanceId" value="([^"]+)"/)[1]);
         return fields;
       }
     },
@@ -419,7 +479,7 @@ test("carga automáticamente subtítulos de Stremio para el torrent activo", asy
   const delayOnlySettings = await fetch(`${app.baseUrl}/settings`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: "subtitleLanguage=es&subtitleId=subtitle-es-2&subtitleDelay=2.5",
+    body: await sessionForm(app, "subtitleLanguage=es&subtitleId=subtitle-es-2&subtitleDelay=2.5"),
   });
   assert.equal(delayOnlySettings.status, 200);
 
@@ -614,6 +674,7 @@ test("prepara, reordena y avanza una maratón de episodios", async (t) => {
     `${app.baseUrl}/activate/candidate-1`,
   );
   assert.equal(activation.status, 200);
+  await preparedStatus(app);
 
   let status = await fetch(`${app.baseUrl}/api/status`).then(
     (response) => response.json(),
@@ -648,7 +709,7 @@ test("prepara, reordena y avanza una maratón de episodios", async (t) => {
   const move = await fetch(`${app.baseUrl}/api/marathon/move`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: `id=${encodeURIComponent("tt0944947:2:4")}&direction=-1`,
+    body: await sessionForm(app, `id=${encodeURIComponent("tt0944947:2:4")}&direction=-1`),
   });
   assert.equal(move.status, 200);
   assert.deepEqual(
@@ -663,7 +724,7 @@ test("prepara, reordena y avanza una maratón de episodios", async (t) => {
   const remove = await fetch(`${app.baseUrl}/api/marathon/remove`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: `id=${encodeURIComponent("tt0944947:2:2")}`,
+    body: await sessionForm(app, `id=${encodeURIComponent("tt0944947:2:2")}`),
   });
   assert.equal(remove.status, 200);
   assert.deepEqual(
@@ -683,7 +744,7 @@ test("prepara, reordena y avanza una maratón de episodios", async (t) => {
       headers: {
         "content-type": "application/x-www-form-urlencoded",
       },
-      body: "autoplay=false&countdownSeconds=6&queueSize=3",
+      body: await sessionForm(app, "autoplay=false&countdownSeconds=6&queueSize=3"),
     },
   );
   assert.equal(settings.status, 200);
@@ -704,7 +765,7 @@ test("prepara, reordena y avanza una maratón de episodios", async (t) => {
       headers: {
         "content-type": "application/x-www-form-urlencoded",
       },
-      body: `id=${encodeURIComponent("tt0944947:2:4")}`,
+      body: await sessionForm(app, `id=${encodeURIComponent("tt0944947:2:4")}`),
     },
   );
   assert.equal(advance.status, 200);
@@ -730,7 +791,7 @@ test("prepara, reordena y avanza una maratón de episodios", async (t) => {
       headers: {
         "content-type": "application/x-www-form-urlencoded",
       },
-      body: `id=${encodeURIComponent("tt0944947:2:4")}`,
+      body: await sessionForm(app, `id=${encodeURIComponent("tt0944947:2:4")}`),
     },
   );
   assert.equal(staleAdvance.status, 409);
@@ -764,6 +825,7 @@ test("degrada la maratón sin interrumpir el episodio activo", async (t) => {
 
   const activation = await fetch(`${app.baseUrl}/activate/${id}`);
   assert.equal(activation.status, 200);
+  await preparedStatus(app);
 
   const status = await fetch(`${app.baseUrl}/api/status`).then(
     (response) => response.json(),
@@ -779,7 +841,7 @@ test("degrada la maratón sin interrumpir el episodio activo", async (t) => {
       headers: {
         "content-type": "application/x-www-form-urlencoded",
       },
-      body: "id=tt0944947%3A2%3A2",
+      body: await sessionForm(app, "id=tt0944947%3A2%3A2"),
     },
   );
   assert.equal(advance.status, 409);
@@ -833,4 +895,88 @@ test("la URL fija informa cuando no existe una reproducción activa", async (t) 
 
   assert.equal(response.status, 200);
   assert.match(html, /Esperando una película/);
+});
+
+test("session mutations reject foreign origins and stale forms without changing state", async t => {
+  const app = await fixture(); t.after(app.close);
+  const id = app.registry.addCandidate({ url: "https://example.com/a.mp4" });
+  app.registry.activate(id);
+  app.registry.setMarathon({ items: [{ id: "episode", title: "Episode" }] });
+  const status = await fetch(`${app.baseUrl}/api/status`).then(r => r.json());
+  for (const path of ["/settings", "/api/marathon/settings", "/api/marathon/move", "/api/marathon/remove", "/api/marathon/advance", "/api/marathon/undo"]) {
+    const body = new URLSearchParams({ serverInstanceId: status.serverInstanceId, version: status.version, id: "episode" });
+    assert.equal((await fetch(`${app.baseUrl}${path}`, { method: "POST", body, headers: { origin: "https://evil.example" } })).status, 403);
+    body.set("version", "999");
+    assert.equal((await fetch(`${app.baseUrl}${path}`, { method: "POST", body })).status, 409);
+  }
+  assert.equal(app.registry.marathon.items.length, 1);
+});
+
+test("activation acknowledges before optional preparation and stale jobs cannot overwrite a newer source", async t => {
+  let release;
+  const deferred = new Promise(resolve => { release = resolve; });
+  const app = await fixture({ fetchImpl: async () => { await deferred; return Response.json({ subtitles: [{ id: "old", lang: "eng", url: "https://example.com/old.srt" }], meta: { videos: [] } }); } });
+  t.after(app.close); t.after(() => release());
+  await app.configStore.save({ torrentioManifestUrl: "https://torrentio.strem.fun/manifest.json" });
+  const first = app.registry.addCandidate({ url: "https://example.com/a.mp4", unilinkContent: { type: "series", id: "tt123:1:1" } });
+  const response = await fetch(`${app.baseUrl}/activate/${first}`, { redirect: "manual", signal: AbortSignal.timeout(1000) });
+  assert.equal(response.status, 303); assert.equal(response.headers.get("location"), "/session");
+  assert.equal((await fetch(`${app.baseUrl}/api/status`).then(r => r.json())).preparing, true);
+  const second = app.registry.addCandidate({ url: "https://example.com/b.mp4" });
+  await fetch(`${app.baseUrl}/activate/${second}`);
+  const active = app.registry.active;
+  app.registry.setMarathon({ items: [{ id: "keep" }] });
+  await fetch(`${app.baseUrl}/activate/expired`);
+  assert.equal(app.registry.marathon.items[0].id, "keep");
+  release(); await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(app.registry.active, active); assert.deepEqual(active.subtitles, []);
+  assert.equal(app.registry.marathon.items[0].id, "keep");
+});
+
+test("advance rechecks the source after configuration loads", async t => {
+  let unblock;
+  let loading;
+  const entered = new Promise(resolve => { loading = resolve; });
+  const configStore = { load: async () => { loading(); return new Promise(resolve => { unblock = () => resolve({}); }); } };
+  const app = await fixture({ configStore }); t.after(app.close);
+  const id = app.registry.addCandidate({ url: "https://example.com/a.mp4" });
+  const next = app.registry.addCandidate({ url: "https://example.com/b.mp4" });
+  app.registry.activate(id);
+  app.registry.setMarathon({ items: [{ id: "next", candidateIds: [next] }] });
+  const body = await sessionForm(app, { id: "next" });
+  const advancing = fetch(`${app.baseUrl}/api/marathon/advance`, { method: "POST", body });
+  await entered;
+  const selected = app.registry.activate(next);
+  app.registry.setMarathon({ items: [{ id: "keep" }] });
+  unblock();
+  assert.equal((await advancing).status, 409);
+  assert.equal(app.registry.active, selected);
+  assert.equal(app.registry.marathon.items[0].id, "keep");
+});
+
+test("concurrent queue refills reserve pending episodes once and undo preserves them", async t => {
+  let unblock;
+  let started;
+  const entered = new Promise(resolve => { started = resolve; });
+  const app = await fixture({ fetchImpl: async () => {
+    started(); await new Promise(resolve => { unblock = resolve; });
+    return Response.json({ streams: [{ url: "https://example.com/next.mp4" }] });
+  } }); t.after(app.close);
+  await app.configStore.save({ torrentioManifestUrl: "https://torrentio.strem.fun/manifest.json" });
+  app.registry.activate(app.registry.addCandidate({ url: "https://example.com/current.mp4" }));
+  app.registry.setMarathonSettings({ queueSize: 3 });
+  app.registry.setMarathon({ items: [{ id: "a", title: "A" }, { id: "b", title: "B" }, { id: "c", title: "C" }], pending: [{ id: "tt123:1:4", title: "D" }] });
+  const firstBody = await sessionForm(app, { id: "a" });
+  const secondBody = await sessionForm(app, { id: "b" });
+  const first = fetch(`${app.baseUrl}/api/marathon/remove`, { method: "POST", body: firstBody });
+  await entered;
+  const second = fetch(`${app.baseUrl}/api/marathon/remove`, { method: "POST", body: secondBody });
+  // The second removal enters the same in-flight refill before it completes.
+  for (let i = 0; i < 100 && app.registry.marathon.items.some(item => item.id === "b"); i++) await new Promise(resolve => setTimeout(resolve, 5));
+  unblock();
+  assert.equal((await first).status, 200); assert.equal((await second).status, 200);
+  assert.deepEqual(app.registry.marathon.items.map(item => item.id), ["c", "tt123:1:4"]);
+  const undo = await fetch(`${app.baseUrl}/api/marathon/undo`, { method: "POST", body: await sessionForm(app, {}) });
+  assert.equal(undo.status, 200);
+  assert.deepEqual(app.registry.marathon.items.map(item => item.id), ["b", "c", "tt123:1:4"]);
 });

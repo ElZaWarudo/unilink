@@ -330,3 +330,20 @@ test("mantiene, reordena y avanza la cola de maratón", () => {
   assert.equal(registry.marathonStatus().items.length, 0);
   assert.equal(registry.marathonStatus().canAdvance, false);
 });
+
+test("undo restores the last removed item and a new activation invalidates recovery", () => {
+  const registry = new StreamRegistry();
+  const id = registry.addCandidate({ url: "https://example.com/current.mp4" });
+  registry.activate(id);
+  registry.setMarathon({ items: [{ id: "a", title: "A" }, { id: "b", title: "B" }] });
+  registry.removeMarathonItem("a");
+  assert.equal(registry.marathonStatus().undoTitle, "A");
+  assert.equal(registry.marathonStatus().canUndo, true);
+  registry.appendMarathonItems([{ id: "c", title: "C" }]);
+  registry.undoMarathonRemoval();
+  assert.deepEqual(registry.marathonStatus().items.map(item => item.id), ["a", "b", "c"]);
+  assert.equal(registry.marathonStatus().canUndo, false);
+  registry.removeMarathonItem("b");
+  registry.activate(id);
+  assert.equal(registry.marathonStatus().canUndo, false);
+});

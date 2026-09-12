@@ -6,6 +6,7 @@ import { HLS_RESOURCE, proxyHls } from "./hls.js";
 import { StremioSync } from "./stremio-sync.js";
 import { handleStremioRequest, sameOriginRequest } from "./stremio-routes.js";
 import { SubtitleSync } from "./subtitle-sync.js";
+import { SpeechSetup } from "./speech-setup.js";
 
 import {
   normalizeTorrentioManifestUrl,
@@ -40,7 +41,7 @@ import {
 
 const MANIFEST = {
   id: "community.unilink.local",
-  version: "0.1.0",
+  version: "0.2.0",
   name: "Unilink · Servir en red",
   description:
     "Expone en la red local una fuente elegida desde Torrentio para verla en un navegador.",
@@ -296,9 +297,9 @@ async function loadActiveSubtitles({
       const payload = await subtitleResponse.json();
       subtitles = [...subtitles, ...(payload.subtitles ?? [])];
     }
-    registry.setSubtitles(normalizeSubtitleTracks(subtitles));
+    if (registry.active === active) registry.setSubtitles(normalizeSubtitleTracks(subtitles));
   } catch (error) {
-    registry.setSubtitles(normalizeSubtitleTracks(active?.subtitles));
+    if (registry.active === active) registry.setSubtitles(normalizeSubtitleTracks(active?.subtitles));
     warning = `No se pudieron cargar subtítulos automáticos: ${error.message}`;
   }
   return warning;
@@ -327,6 +328,7 @@ async function prepareMarathonItem({
       throw new Error(`Torrentio respondió con HTTP ${response.status}.`);
     }
     const payload = await response.json();
+    if (registry.active !== currentSource) return null;
     const ranked = rankMarathonStreams(
       currentSource,
       payload.streams ?? [],
@@ -394,8 +396,9 @@ async function prepareSeriesMarathon({
   fetchImpl,
   metadataManifestUrl,
 }) {
+  const active = registry.active;
   registry.clearMarathon();
-  const content = registry.active?.unilinkContent;
+  const content = active?.unilinkContent;
   const parsed = parseSeriesVideoId(content?.id);
   if (content?.type !== "series" || !parsed) {
     return;
@@ -419,6 +422,7 @@ async function prepareSeriesMarathon({
       throw new Error(`Metadatos HTTP ${response.status}.`);
     }
     const payload = await response.json();
+    if (registry.active !== active) return;
     const currentVideo = (payload.meta?.videos ?? []).find(
       (video) =>
         parseSeriesVideoId(video?.id)?.videoId ===
@@ -446,13 +450,14 @@ async function prepareSeriesMarathon({
     const pending = following.slice(queueSize);
     const items = await prepareMarathonItems({
       videos: initial,
-      currentSource: registry.active,
+      currentSource: active,
       torrentioManifestUrl: config.torrentioManifestUrl,
       registry,
       fetchImpl,
     });
-    registry.setMarathon({ items, pending });
+    if (registry.active === active) registry.setMarathon({ items: items.filter(Boolean), pending });
   } catch (error) {
+    if (registry.active !== active) return;
     registry.setMarathon({
       warning: `No se pudo preparar la maratón: ${error.message}`,
     });
@@ -464,32 +469,32 @@ async function fillMarathonQueue({
   config,
   fetchImpl,
 }) {
-  const status = registry.marathonStatus();
-  if (!status || !config.torrentioManifestUrl) {
-    return status;
+  const active = registry.active;
+  const marathon = registry.marathon;
+  if (!marathon || !config.torrentioManifestUrl) return registry.marathonStatus();
+  if (marathon.filling) {
+    await marathon.filling;
+    if (registry.active !== active || registry.marathon !== marathon) return registry.marathonStatus();
+    return fillMarathonQueue({ registry, config, fetchImpl });
   }
-  const missing = Math.max(
-    0,
-    registry.marathonSettings.queueSize - status.items.length,
-  );
+  const missing = Math.max(0, registry.marathonSettings.queueSize - marathon.items.length);
   const videos = registry.takePendingMarathonVideos(missing);
-  if (videos.length === 0) {
-    return status;
-  }
-  const items = await prepareMarathonItems({
-    videos,
-    currentSource: registry.active,
-    torrentioManifestUrl: config.torrentioManifestUrl,
-    registry,
-    fetchImpl,
-  });
-  return registry.appendMarathonItems(items);
+  if (!videos.length) return registry.marathonStatus();
+  marathon.filling = prepareMarathonItems({ videos, currentSource: active,
+    torrentioManifestUrl: config.torrentioManifestUrl, registry, fetchImpl });
+  try {
+    const items = await marathon.filling;
+    if (registry.active === active && registry.marathon === marathon) registry.appendMarathonItems(items.filter(Boolean));
+    else if (registry.marathon === marathon) marathon.pending.unshift(...videos);
+    return registry.marathonStatus();
+  } finally { marathon.filling = null; }
 }
 
 function playerStatus(registry, serverInstanceId, watchUrl) {
-  const subtitleUrl = subtitleSelection(registry.active).url;
+  const selectedSubtitle = subtitleSelection(registry.active);
   return {
     active: Boolean(registry.active),
+    preparing: Boolean(registry.active?.preparing),
     version: registry.active?.version ?? 0,
     serverInstanceId,
     watchUrl,
@@ -498,8 +503,9 @@ function playerStatus(registry, serverInstanceId, watchUrl) {
       registry.active?.playbackSettings?.subtitleDelay ?? 0,
     subtitleId:
       registry.active?.playbackSettings?.subtitleId ?? "",
-    subtitleUrl,
-    subtitleLanguage: subtitleSelection(registry.active).subtitle?.language ?? "",
+    subtitleUrl: selectedSubtitle.url,
+    subtitleLanguage: selectedSubtitle.subtitle?.language ?? "",
+    subtitleStatus: selectedSubtitle.status,
     name:
       registry.active?.unilinkEpisode?.title ??
       registry.active?.description ??
@@ -521,6 +527,7 @@ export function createUnilinkServer({
   metadataManifestUrl = DEFAULT_METADATA_MANIFEST_URL,
   fetchImpl = fetch,
   subtitleSync = new SubtitleSync(),
+  speechSetup = new SpeechSetup(),
 }) {
   const serverInstanceId = randomUUID();
   const adminToken = randomUUID();
@@ -531,11 +538,11 @@ export function createUnilinkServer({
     applyCommonHeaders(response);
     const url = new URL(request.url, "http://unilink.local");
     const pathname = url.pathname;
-    if (["/watch", "/configure", "/api/progress", "/api/subtitle-sync"].includes(pathname) || pathname.startsWith("/api/stremio/")) {
+    if (["/watch", "/session", "/settings", "/configure", "/api/progress", "/api/subtitle-sync", "/api/speech-setup"].includes(pathname) || pathname.startsWith("/api/stremio/") || pathname.startsWith("/api/marathon/")) {
       response.removeHeader("Access-Control-Allow-Origin");
       response.setHeader("Referrer-Policy", "no-referrer");
       response.setHeader("X-Frame-Options", "DENY");
-      if (!sameOriginRequest(request, ["/watch", "/configure"].includes(pathname))) {
+      if (!sameOriginRequest(request, ["/watch", "/session", "/configure"].includes(pathname))) {
         sendJson(response, 403, { error: "Acceso no permitido." });
         return;
       }
@@ -555,9 +562,36 @@ export function createUnilinkServer({
     }
 
     try {
+      let sessionForm;
+      let sessionActive;
+      const currentSession = () => Boolean(sessionActive && registry.active === sessionActive);
+      const rejectStale = () => {
+        sendJson(response, 409, { error: "La fuente ha cambiado. Recarga la página.", state: "stale" });
+      };
+      if (request.method === "POST" && (pathname === "/settings" || pathname.startsWith("/api/marathon/"))) {
+        sessionForm = await readForm(request);
+        sessionActive = registry.active;
+        if (!sessionActive || sessionForm.get("serverInstanceId") !== serverInstanceId ||
+            sessionForm.get("version") !== String(sessionActive.version)) { rejectStale(); return; }
+      }
       if (await handleStremioRequest({ request, response, pathname: url.pathname,
         sync: stremioSync, registry, serverInstanceId, adminToken, progressToken,
         loopback: isLoopback(request.socket.remoteAddress) })) return;
+      if (sessionForm && !currentSession()) { rejectStale(); return; }
+      if (pathname === "/api/speech-setup") {
+        if (!isLoopback(request.socket.remoteAddress) || request.headers["x-unilink-token"] !== adminToken) {
+          sendJson(response, 403, { error: "La instalación solo está disponible desde la configuración del PC." });
+          return;
+        }
+        if (request.method === "GET") {
+          sendJson(response, 200, await speechSetup.status());
+        } else if (request.method === "POST") {
+          sendJson(response, 202, speechSetup.start());
+        } else {
+          sendJson(response, 405, { error: "Método no permitido." });
+        }
+        return;
+      }
       if (pathname === "/api/subtitle-sync") {
         if (request.headers["x-unilink-token"] !== progressToken) {
           sendJson(response, 403, { state: "error" });
@@ -565,7 +599,7 @@ export function createUnilinkServer({
         }
         const jobId = url.searchParams.get("job");
         if (request.method === "GET") {
-          sendJson(response, 200, jobId ? subtitleSync.get(jobId) : { available: await subtitleSync.available() });
+          sendJson(response, 200, jobId ? subtitleSync.get(jobId) : { available: !speechSetup.task && await subtitleSync.available() });
           return;
         }
         if (request.method === "DELETE" && jobId) {
@@ -598,7 +632,7 @@ export function createUnilinkServer({
           };
         if (!isCurrent()) { sendJson(response, 409, { state: "stale" }); return; }
         if (selected.subtitle?.language !== "en") { sendJson(response, 422, { state: "insufficient", reason: "english_only" }); return; }
-        if (!await subtitleSync.available()) { sendJson(response, 503, { state: "unavailable" }); return; }
+        if (!await subtitleSync.available() || speechSetup.task) { sendJson(response, 503, { state: "unavailable" }); return; }
         const start = Math.max(0, Math.min(Math.floor(body.time / 60) * 60 - 20, body.duration - 30));
         const window = { start, duration: Math.min(120, body.duration - start) };
         const local = `http://127.0.0.1:${server.address().port}`;
@@ -690,6 +724,7 @@ export function createUnilinkServer({
             stremioToken: adminToken,
             saved: url.searchParams.get("saved") === "1",
             manifestUrl,
+            watchUrl,
           }),
         );
         return;
@@ -711,6 +746,10 @@ export function createUnilinkServer({
           normalized = normalizeTorrentioManifestUrl(rawUrl);
           await configStore.save({ torrentioManifestUrl: normalized });
         } catch (error) {
+          if (request.headers.accept?.includes("application/json")) {
+            sendJson(response, 400, { error: error.message });
+            return;
+          }
           sendHtml(
             response,
             400,
@@ -719,8 +758,13 @@ export function createUnilinkServer({
               stremioToken: adminToken,
               error: error.message,
               manifestUrl,
+            watchUrl,
             }),
           );
+          return;
+        }
+        if (request.headers.accept?.includes("application/json")) {
+          sendJson(response, 200, { saved: true });
           return;
         }
         response.writeHead(303, { location: "/configure?saved=1" });
@@ -791,29 +835,29 @@ export function createUnilinkServer({
         const config = await configStore.load();
         registry.setPlaybackDefaults(config.playbackSettings);
         registry.setMarathonSettings(config.marathonSettings);
-        registry.clearMarathon();
         const active = registry.activate(
           decodeURIComponent(activationMatch[1]),
         );
-        const [subtitleWarning] = await Promise.all([
-          loadActiveSubtitles({
-            registry,
-            fetchImpl,
-            stremioServerUrl,
-            subtitlesManifestUrl,
-          }),
-          prepareSeriesMarathon({
-            registry,
-            config,
-            fetchImpl,
-            metadataManifestUrl,
-          }),
-        ]);
-        sendHtml(
-          response,
-          200,
-          activationPage({ watchUrl, active, subtitleWarning }),
-        );
+        active.preparing = true;
+        void Promise.all([
+          loadActiveSubtitles({ registry, fetchImpl, stremioServerUrl, subtitlesManifestUrl }),
+          prepareSeriesMarathon({ registry, config, fetchImpl, metadataManifestUrl }),
+        ]).then(([subtitleWarning]) => {
+          active.subtitleWarning = subtitleWarning;
+        }).finally(() => { active.preparing = false; });
+        response.writeHead(303, { location: "/session" });
+        response.end();
+        return;
+      }
+
+      if (pathname === "/session" && request.method === "GET") {
+        if (!isLoopback(request.socket.remoteAddress)) {
+          sendJson(response, 403, { error: "La sesión solo está disponible en el PC." }); return;
+        }
+        if (!registry.active) { response.writeHead(303, { location: "/watch" }); response.end(); return; }
+        const active = registry.active;
+        sendHtml(response, 200, activationPage({ watchUrl, active, serverInstanceId,
+          preparing: Boolean(active.preparing), subtitleWarning: active.subtitleWarning ?? "" }));
         return;
       }
 
@@ -826,7 +870,7 @@ export function createUnilinkServer({
           );
           return;
         }
-        const form = await readForm(request);
+        const form = sessionForm;
         const active = registry.setPlaybackSettings({
           subtitleLanguage: form.get("subtitleLanguage"),
           subtitleId: form.get("subtitleId"),
@@ -835,6 +879,7 @@ export function createUnilinkServer({
         await configStore.save({
           playbackSettings: active.playbackSettings,
         });
+        if (!currentSession()) { rejectStale(); return; }
         if (request.headers.accept?.includes("application/json")) {
           sendJson(
             response,
@@ -845,7 +890,7 @@ export function createUnilinkServer({
           sendHtml(
             response,
             200,
-            activationPage({ watchUrl, active, settingsSaved: true }),
+            activationPage({ watchUrl, active, serverInstanceId, preparing: Boolean(active.preparing), subtitleWarning: active.subtitleWarning ?? "", settingsSaved: true }),
           );
         }
         return;
@@ -878,7 +923,7 @@ export function createUnilinkServer({
         url.pathname === "/api/marathon/settings" &&
         request.method === "POST"
       ) {
-        const form = await readForm(request);
+        const form = sessionForm;
         const settings = registry.setMarathonSettings({
           autoplay: form.get("autoplay"),
           countdownSeconds: form.get("countdownSeconds"),
@@ -887,7 +932,9 @@ export function createUnilinkServer({
         const config = await configStore.save({
           marathonSettings: settings,
         });
+        if (!currentSession()) { rejectStale(); return; }
         await fillMarathonQueue({ registry, config, fetchImpl });
+        if (!currentSession()) { rejectStale(); return; }
         sendJson(
           response,
           200,
@@ -900,7 +947,7 @@ export function createUnilinkServer({
         url.pathname === "/api/marathon/move" &&
         request.method === "POST"
       ) {
-        const form = await readForm(request);
+        const form = sessionForm;
         registry.moveMarathonItem(
           form.get("id"),
           form.get("direction"),
@@ -917,10 +964,12 @@ export function createUnilinkServer({
         url.pathname === "/api/marathon/remove" &&
         request.method === "POST"
       ) {
-        const form = await readForm(request);
+        const form = sessionForm;
         registry.removeMarathonItem(form.get("id"));
         const config = await configStore.load();
+        if (!currentSession()) { rejectStale(); return; }
         await fillMarathonQueue({ registry, config, fetchImpl });
+        if (!currentSession()) { rejectStale(); return; }
         sendJson(
           response,
           200,
@@ -929,12 +978,19 @@ export function createUnilinkServer({
         return;
       }
 
+      if (pathname === "/api/marathon/undo" && request.method === "POST") {
+        registry.undoMarathonRemoval();
+        sendJson(response, 200, playerStatus(registry, serverInstanceId, watchUrl));
+        return;
+      }
+
       if (
         url.pathname === "/api/marathon/advance" &&
         request.method === "POST"
       ) {
-        const form = await readForm(request);
+        const form = sessionForm;
         const config = await configStore.load();
+        if (!currentSession()) { rejectStale(); return; }
         try {
           registry.advanceMarathon(form.get("id"));
         } catch (error) {
@@ -944,6 +1000,7 @@ export function createUnilinkServer({
           });
           return;
         }
+        sessionActive = registry.active;
         await Promise.all([
           loadActiveSubtitles({
             registry,
@@ -953,6 +1010,7 @@ export function createUnilinkServer({
           }),
           fillMarathonQueue({ registry, config, fetchImpl }),
         ]);
+        if (!currentSession()) { rejectStale(); return; }
         sendJson(
           response,
           200,
@@ -1006,6 +1064,6 @@ export function createUnilinkServer({
       }
     }
   });
-  server.once("close", () => subtitleSync.close());
+  server.once("close", () => { subtitleSync.close(); speechSetup.close(); });
   return server;
 }

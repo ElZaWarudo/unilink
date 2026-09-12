@@ -28,7 +28,8 @@ async function resolveExecutable(path) {
 export async function speechAvailable(paths = speechPaths()) {
   const checks = await Promise.all([
     resolveExecutable(paths.python), resolveExecutable(paths.ffmpeg), resolveExecutable(paths.ffprobe),
-    access(join(paths.model, "model.bin")).then(() => true, () => false),
+    ...["model.bin", "config.json", "tokenizer.json", "vocabulary.txt"].map(name =>
+      access(join(paths.model, name)).then(() => true, () => false)),
   ]);
   return checks.every(Boolean);
 }

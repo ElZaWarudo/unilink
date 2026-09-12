@@ -83,14 +83,16 @@ in Stremio updates the content served by the same `/watch` address.
 
 ## English subtitle synchronization
 
-Install the optional speech engine once on the host computer, from this checkout:
-
-```bash
-npm run setup:subtitle-sync
-```
+Open **Configuración** from the tray on the host PC. Under **Sincronización por
+voz**, choose **Instalar motor de inglés**. The page reports installation progress
+and offers a retry if it fails. Existing installations are detected automatically.
+The desktop package does not require Node.js or a source checkout for this step.
+Developers can also run `npm run setup:subtitle-sync` from the checkout.
 
 Setup requires Python 3.10 or newer and downloads the English `base.en` model and
-its Python dependencies. Windows uses Stremio's bundled FFmpeg and FFprobe; on
+its Python dependencies. Installation needs Internet access and stops after
+20 minutes if it cannot finish; retry resumes reusable downloads. Windows uses
+Stremio's bundled FFmpeg and FFprobe; on
 Linux install both commands on `PATH`. Custom installations can set
 `UNILINK_FFMPEG`, `UNILINK_FFPROBE`, `UNILINK_SETUP_PYTHON`, and
 `UNILINK_SUBTITLE_SYNC_HOME` (default `~/.unilink/subtitle-sync`).
@@ -108,6 +110,17 @@ seeking or changing tracks discards pending work. Manual subtitle delay remains
 additive, and switching auto-sync off restores the original cue timings.
 The first correction can take around a minute on a laptop CPU. This is local
 phrase timing, not a guarantee of frame-accurate alignment across an episode.
+
+## Playback recovery
+
+The player keeps its controls visible while paused or after a playback failure.
+Use **Reintentar subtítulos** to recover a failed subtitle download without
+restarting the video. Local resume status and Stremio account status are reported
+separately; account linking is optional.
+
+Queue edits show pending state and retain keyboard focus. **Deshacer última
+eliminación** restores the last removed episode until another source is selected.
+An old player or settings tab cannot update a newer viewing session.
 
 ## Tray application
 

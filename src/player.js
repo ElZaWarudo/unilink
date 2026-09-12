@@ -205,6 +205,7 @@ function audioLanguage(track) {
 
 export function audioTrackLabel(track, index) {
   let language = audioLanguage(track);
+  if (language === "und" || language === "unknown") language = "";
   try {
     language = new Intl.DisplayNames(["es"], { type: "language" }).of(language);
   } catch { /* Older TV browsers can still show the language code. */ }
@@ -526,6 +527,7 @@ export function startPlayer(root) {
   const syncButton = root.querySelector('[data-player-control="subtitle-sync"]');
   const syncStatus = root.querySelector('[data-player-part="subtitle-sync-status"]');
   const retryButton = root.querySelector('[data-player-control="retry"]');
+  const subtitleRetry = root.querySelector('[data-player-control="subtitle-retry"]');
   const captionsButton = root.querySelector(
     '[data-player-control="captions"]',
   );
@@ -535,6 +537,8 @@ export function startPlayer(root) {
   const controls = root.querySelector(".player-controls");
   const delayState = document.querySelector("[data-subtitle-delay-state]");
   const marathonRoot = document.querySelector("[data-marathon]");
+  const marathonOperation = marathonRoot?.querySelector("[data-marathon-operation]");
+  const marathonUndo = marathonRoot?.querySelector('[data-marathon-action="undo"]');
   const marathonList = marathonRoot?.querySelector(
     "[data-marathon-list]",
   );
@@ -584,19 +588,29 @@ export function startPlayer(root) {
   let captionsEnabled = Boolean(subtitleUrl);
   let captionsLoaded = false;
   let subtitleLoadGeneration = 0;
+  let subtitleController;
+  let statusController;
+  let disposed = false;
+  const mutationControllers = new Set();
   let animationFrame = 0;
   let lastCaption = "";
   let positionRestored = false;
   let hasPlayed = !video.paused;
   const progressStatus = document.querySelector("[data-stremio-progress]");
+  const localProgress = document.querySelector("[data-local-progress]");
+  const subtitleStatus = document.querySelector("[data-subtitle-status]");
   const progressReporter = createProgressReporter({
     token: root.dataset.progressToken,
     version: expectedVersion, serverInstanceId: expectedServerInstanceId,
     onState(state) {
       if (!progressStatus) return;
-      progressStatus.textContent = state === "synced" ? "Progreso guardado en Stremio" :
-        state === "disconnected" ? "Conecta Stremio en la configuración del PC para guardar el progreso en tu cuenta" :
-        "Progreso pendiente de guardar en Stremio. Se reintentará automáticamente.";
+      progressStatus.textContent = ({
+        synced: "Progreso guardado en Stremio.",
+        disconnected: "Conecta Stremio en la configuración del PC para guardar el progreso en tu cuenta.",
+        unsupported: "Este contenido no admite guardar el progreso en Stremio.",
+        pending: "Stremio aún no ha confirmado el guardado del progreso.",
+        error: "No se pudo guardar el progreso en Stremio. Se reintentará durante la reproducción.",
+      })[state] || "Stremio no ha confirmado el guardado del progreso.";
     },
   });
   let lastSavedPosition = 0;
@@ -609,9 +623,13 @@ export function startPlayer(root) {
   let marathonState = null;
   let marathonFingerprint = "";
   let marathonBusy = false;
+  let marathonFocus = null;
+  let lastClock = "";
+  let marathonRevision = 0;
   let marathonCountdownTimer = 0;
   let marathonCountdownRemaining = 0;
   let playbackFailure = "";
+  let lastPositiveVolume = video.volume > 0 ? video.volume : 1;
   let actualAudio = { index: null, language: "" };
   let syncedCues = [], syncEnabled = false;
   const subtitleSync = createSubtitleSyncController({
@@ -632,7 +650,7 @@ export function startPlayer(root) {
           off: eligible ? "" : "Requiere subtítulos y audio en inglés",
           waiting: "Esperando diálogo…", working: "Sincronizando este tramo…",
           ready: "Tramo sincronizado", insufficient: "Sin coincidencia fiable; se conserva el tiempo original",
-          busy: "Motor ocupado; se reintentará", unavailable: "Activa el motor local en el PC",
+          busy: "Motor ocupado; se reintentará", unavailable: "Usa «Configurar en el PC» para instalar el motor en el PC que ejecuta Unilink",
           error: "No se pudo sincronizar. Desactiva y activa para reintentar",
           stale: "La fuente ha cambiado. Desactiva y activa para reintentar",
         };
@@ -652,6 +670,10 @@ export function startPlayer(root) {
   video.controls = false;
   root.classList.add("is-enhanced");
   root.dataset.controlsState = "visible";
+  const controlsObserver = typeof ResizeObserver === "function" ? new ResizeObserver(() => {
+    root.style.setProperty("--controls-height", `${controls.offsetHeight}px`);
+  }) : null;
+  controlsObserver?.observe(controls);
 
   function isFullscreen() {
     return document.fullscreenElement === root;
@@ -669,7 +691,8 @@ export function startPlayer(root) {
 
   function hideControls() {
     clearControlsTimer();
-    if (controlsPointerDown || controlsHaveFocus()) {
+    if (root.clientWidth <= 760 && !isFullscreen()) return;
+    if (video.paused || video.ended || playbackFailure || video.error || controlsPointerDown || controlsHaveFocus()) {
       return;
     }
     root.classList.add("is-controls-hidden");
@@ -678,7 +701,8 @@ export function startPlayer(root) {
 
   function scheduleControlsHide() {
     clearControlsTimer();
-    if (controlsPointerDown || controlsHaveFocus()) {
+    if (root.clientWidth <= 760 && !isFullscreen()) return;
+    if (video.paused || video.ended || playbackFailure || video.error || controlsPointerDown || controlsHaveFocus()) {
       return;
     }
     controlsTimer = setTimeout(hideControls, CONTROLS_HIDE_DELAY);
@@ -695,6 +719,7 @@ export function startPlayer(root) {
 
   function setMessage(text = "") {
     text = playbackFailure || text;
+    root.classList[playbackFailure ? "add" : "remove"]("has-playback-error");
     message.textContent = text;
     message.hidden = !text;
   }
@@ -705,7 +730,7 @@ export function startPlayer(root) {
     button.dataset.marathonAction = action;
     button.dataset.marathonId = item.id;
     button.textContent = label;
-    button.disabled = disabled;
+    button.disabled = marathonBusy || disabled;
     const actionLabel = {
       "move-up": "Subir",
       "move-down": "Bajar",
@@ -716,7 +741,12 @@ export function startPlayer(root) {
   }
 
   function renderMarathon(state) {
-    if (!marathonRoot || !marathonList || !state) {
+    if (!marathonRoot || !marathonList) return;
+    if (!state) {
+      marathonState = null;
+      marathonFingerprint = "";
+      marathonRoot.hidden = true;
+      cancelMarathonCountdown();
       return;
     }
     const fingerprint = JSON.stringify(state);
@@ -725,6 +755,12 @@ export function startPlayer(root) {
       return;
     }
     marathonFingerprint = fingerprint;
+    const focused = document.activeElement === document.body && marathonFocus
+      ? marathonFocus : document.activeElement;
+    marathonFocus = null;
+    const focusAction = marathonRoot.contains(focused) ? focused.dataset.marathonAction : null;
+    const focusId = focused?.dataset?.marathonId;
+    const focusIndex = marathonState?.items?.findIndex(item => item.id === focusId) ?? -1;
     marathonState = state;
     marathonRoot.hidden = false;
     if (marathonToggle) {
@@ -741,6 +777,11 @@ export function startPlayer(root) {
       marathonAdvance.disabled =
         marathonBusy || !state.canAdvance;
     }
+    if (marathonUndo) {
+      marathonUndo.hidden = !state.canUndo;
+      marathonUndo.disabled = marathonBusy || !state.canUndo;
+      marathonUndo.textContent = state.undoTitle ? `Deshacer: ${state.undoTitle}` : "Deshacer última eliminación";
+    }
     if (marathonWarning) {
       marathonWarning.textContent = state.warning ?? "";
       marathonWarning.hidden = !state.warning;
@@ -751,9 +792,8 @@ export function startPlayer(root) {
       empty.className = "marathon-empty";
       empty.textContent = "No hay más episodios preparados.";
       marathonList.append(empty);
-      return;
     }
-    state.items.forEach((item, index) => {
+    (state.items || []).forEach((item, index) => {
       const row = document.createElement("li");
       row.className =
         `marathon-item${item.prepared ? "" : " is-unavailable"}`;
@@ -787,6 +827,29 @@ export function startPlayer(root) {
       row.append(content, actions);
       marathonList.append(row);
     });
+    if (focusAction && !marathonBusy) {
+      const buttons = [...marathonRoot.querySelectorAll("[data-marathon-action]")].filter(item => !item.disabled && !item.hidden);
+      const neighborId = state.items?.[Math.min(Math.max(0, focusIndex), state.items.length - 1)]?.id;
+      const target = buttons.find(item => item.dataset.marathonAction === focusAction && item.dataset.marathonId === focusId)
+        || buttons.find(item => item.dataset.marathonId === (focusId || neighborId))
+        || buttons.find(item => item.dataset.marathonId === neighborId && item.dataset.marathonAction === focusAction)
+        || buttons.find(item => item.dataset.marathonId === neighborId)
+        || buttons[0];
+      target?.focus({ preventScroll: true });
+    }
+  }
+
+  function setMarathonBusy(busy, text = "") {
+    if (busy && marathonRoot?.contains(document.activeElement)) marathonFocus = document.activeElement;
+    marathonBusy = busy;
+    if (busy) marathonRevision++;
+    if (marathonOperation) marathonOperation.textContent = text;
+    marathonRoot?.setAttribute("aria-busy", String(busy));
+    if (busy) {
+      for (const button of marathonRoot?.querySelectorAll("[data-marathon-action]") || []) {
+        if (button.dataset.marathonAction !== "cancel-countdown") button.disabled = true;
+      }
+    }
   }
 
   function cancelMarathonCountdown(messageText = "") {
@@ -815,21 +878,35 @@ export function startPlayer(root) {
     for (const [name, value] of Object.entries(values)) {
       body.set(name, String(value));
     }
+    body.set("version", String(expectedVersion));
+    body.set("serverInstanceId", expectedServerInstanceId);
+    const controller = new AbortController();
+    mutationControllers.add(controller);
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    try {
     const response = await fetch(path, {
       method: "POST",
       headers: {
         "content-type": "application/x-www-form-urlencoded",
       },
       body,
+      signal: controller.signal,
     });
     const payload = await response.json().catch(() => ({}));
+    if (controller.signal.aborted) throw new Error("La solicitud tardó demasiado. Comprueba la conexión e inténtalo de nuevo.");
     if (!response.ok) {
-      const error = new Error(payload.error || `HTTP ${response.status}`);
+      const error = new Error(response.status === 409
+        ? "La fuente ha cambiado. Recarga la página para actualizar la cola."
+        : payload.error || `HTTP ${response.status}`);
       error.status = response.status;
       error.payload = payload;
       throw error;
     }
     return payload;
+    } finally {
+      clearTimeout(timeout);
+      mutationControllers.delete(controller);
+    }
   }
 
   function updateDelayState() {
@@ -845,7 +922,7 @@ export function startPlayer(root) {
     if (marathonBusy || !marathonState?.canAdvance) {
       return;
     }
-    marathonBusy = true;
+    setMarathonBusy(true, "Preparando el siguiente episodio…");
     cancelMarathonCountdown();
     setMessage("Preparando el siguiente episodio…");
     if (marathonAdvance) {
@@ -856,14 +933,12 @@ export function startPlayer(root) {
         id: marathonState.items[0].id,
       });
       location.reload();
-    } catch {
-      marathonBusy = false;
-      setMessage(
-        "No se pudo abrir el siguiente episodio. Revisa la cola e inténtalo de nuevo.",
-      );
-      if (marathonAdvance) {
-        marathonAdvance.disabled = !marathonState?.canAdvance;
-      }
+    } catch (error) {
+      if (disposed) return;
+      setMessage();
+      setMarathonBusy(false, error.status === 409 ? error.message : "No se pudo abrir el siguiente episodio. Inténtalo de nuevo.");
+      marathonFingerprint = "";
+      renderMarathon(marathonState);
     }
   }
 
@@ -912,7 +987,7 @@ export function startPlayer(root) {
       await advanceMarathon();
       return;
     }
-    marathonBusy = true;
+    setMarathonBusy(true, "Actualizando la cola…");
     try {
       let result;
       if (action === "toggle-autoplay") {
@@ -932,15 +1007,18 @@ export function startPlayer(root) {
         result = await postForm("/api/marathon/remove", {
           id: button.dataset.marathonId,
         });
+      } else if (action === "undo") {
+        result = await postForm("/api/marathon/undo");
       }
-      marathonBusy = false;
+      if (disposed) return;
+      setMarathonBusy(false, "Cola actualizada.");
       marathonFingerprint = "";
       if (result?.marathon) {
         renderMarathon(result.marathon);
       }
-    } catch {
-      marathonBusy = false;
-      setMessage("No se pudo actualizar la cola de episodios.");
+    } catch (error) {
+      if (disposed) return;
+      setMarathonBusy(false, error.status === 409 ? error.message : "No se pudo actualizar la cola. Comprueba la conexión e inténtalo de nuevo.");
       marathonFingerprint = "";
       renderMarathon(marathonState);
     }
@@ -984,8 +1062,9 @@ export function startPlayer(root) {
     if (video.ended) {
       try {
         localStorage.removeItem(resumeKey);
+        if (localProgress) localProgress.textContent = "Reproducción terminada; posición local borrada.";
       } catch {
-        // Storage can be disabled by the browser.
+        if (localProgress) localProgress.textContent = "El navegador no permite actualizar el progreso local.";
       }
       return;
     }
@@ -1000,8 +1079,10 @@ export function startPlayer(root) {
       localStorage.setItem(resumeKey, String(video.currentTime));
       lastSavedPosition = video.currentTime;
       root.dataset.resumeState = "saved";
+      if (localProgress) localProgress.textContent = "Progreso guardado en este navegador.";
     } catch {
       root.dataset.resumeState = "unavailable";
+      if (localProgress) localProgress.textContent = "El navegador no permite guardar el progreso local.";
     }
   }
 
@@ -1023,7 +1104,14 @@ export function startPlayer(root) {
     const duration = Number.isFinite(video.duration) ? video.duration : 0;
     const progress = duration ? (video.currentTime / duration) * 1000 : 0;
     seek.value = String(Math.max(0, Math.min(1000, progress)));
-    clock.textContent = `${formatClock(video.currentTime)} / ${formatClock(duration)}`;
+    const currentText = formatClock(video.currentTime);
+    const durationText = formatClock(duration);
+    const nextClock = `${currentText} / ${durationText}`;
+    if (nextClock !== lastClock) {
+      lastClock = nextClock;
+      seek.setAttribute("aria-valuetext", `${currentText} de ${durationText}`);
+      clock.textContent = nextClock;
+    }
   }
 
   function showSeekFeedback(offsetSeconds, side) {
@@ -1064,12 +1152,22 @@ export function startPlayer(root) {
   }
 
   function updateVolume() {
+    if (video.volume > 0) lastPositiveVolume = video.volume;
     volume.value = String(video.volume);
+    volume.setAttribute("aria-valuetext", `${Math.round(video.volume * 100)} %${video.muted ? ", silenciado" : ""}`);
     muteButton.textContent = video.muted || video.volume === 0 ? "MUDO" : "VOL";
     muteButton.setAttribute(
       "aria-label",
-      video.muted ? "Activar sonido" : "Silenciar",
+      video.muted || video.volume === 0 ? "Activar sonido" : "Silenciar",
     );
+  }
+
+  function toggleMute() {
+    if (video.muted || video.volume === 0) {
+      if (video.volume === 0) video.volume = lastPositiveVolume;
+      video.muted = false;
+    } else video.muted = true;
+    updateVolume();
   }
 
   function tick() {
@@ -1090,9 +1188,17 @@ export function startPlayer(root) {
       audioPlayback?.resume();
       try {
         await video.play();
+        if (playbackFailure === "No se pudo reanudar. Pulsa Reproducir otra vez o Reintentar.") {
+          playbackFailure = "";
+          setMessage();
+          if (retryButton) retryButton.hidden = true;
+          scheduleControlsHide();
+        }
       } catch (error) {
         if (error.name !== "AbortError") {
-          setMessage("No se pudo reanudar. Pulsa Reproducir otra vez o Reintentar.");
+          playbackFailure = "No se pudo reanudar. Pulsa Reproducir otra vez o Reintentar.";
+          setMessage();
+          showControls({ schedule: false });
           if (retryButton) retryButton.hidden = false;
         }
       }
@@ -1154,10 +1260,13 @@ export function startPlayer(root) {
   }
 
   async function loadSubtitles(nextUrl = subtitleUrl) {
+    if (disposed) return;
+    subtitleController?.abort();
     const previousUrl = subtitleUrl;
     subtitleUrl = String(nextUrl ?? "");
     root.dataset.subtitleUrl = subtitleUrl;
     const generation = ++subtitleLoadGeneration;
+    if (subtitleRetry) subtitleRetry.hidden = true;
     cues = [];
     captionsLoaded = false;
     updateSyncContext();
@@ -1180,13 +1289,17 @@ export function startPlayer(root) {
 
     captionsButton.disabled = true;
     captionsButton.title = "Cargando subtítulos";
+    const controller = new AbortController();
+    subtitleController = controller;
+    const timeout = setTimeout(() => controller.abort(), 15000);
     try {
-      const response = await fetch(subtitleUrl, { cache: "no-store" });
+      const response = await fetch(subtitleUrl, { cache: "no-store", signal: controller.signal });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
       const nextCues = parseWebVtt(await response.text());
-      if (generation !== subtitleLoadGeneration) {
+      if (controller.signal.aborted) throw new Error("Subtitle request timed out");
+      if (disposed || generation !== subtitleLoadGeneration) {
         return;
       }
       cues = nextCues;
@@ -1200,26 +1313,36 @@ export function startPlayer(root) {
       renderCaption();
       updateDelayState();
     } catch {
-      if (generation !== subtitleLoadGeneration) {
+      if (disposed || generation !== subtitleLoadGeneration) {
         return;
       }
       captionsLoaded = false;
       captionsButton.disabled = true;
       captionsButton.title = "No se pudieron cargar los subtítulos";
       root.dataset.subtitleState = "error";
+      if (subtitleRetry) subtitleRetry.hidden = false;
       if (delayState) {
-        delayState.textContent = "Error de subtítulos";
+        delayState.textContent = "No se pudieron cargar los subtítulos. Pulsa Reintentar subtítulos.";
       }
+    } finally {
+      clearTimeout(timeout);
+      if (subtitleController === controller) subtitleController = null;
     }
   }
 
   async function pollStatus() {
+    if (disposed || statusController || marathonBusy) return;
+    const revision = marathonRevision;
+    const controller = new AbortController();
+    statusController = controller;
+    const timeout = setTimeout(() => controller.abort(), 10000);
     try {
-      const response = await fetch(statusUrl, { cache: "no-store" });
+      const response = await fetch(statusUrl, { cache: "no-store", signal: controller.signal });
       if (!response.ok) {
         return;
       }
       const status = await response.json();
+      if (disposed || controller.signal.aborted || marathonBusy || revision !== marathonRevision) return;
       if (
         shouldReloadPlayer(status, {
           version: expectedVersion,
@@ -1230,15 +1353,18 @@ export function startPlayer(root) {
         location.reload();
         return;
       }
-      if (status.marathon) {
+      if (Object.hasOwn(status, "marathon")) {
         renderMarathon(status.marathon);
-        if (!status.marathon.autoplay) {
+        if (!status.marathon?.autoplay) {
           cancelMarathonCountdown();
         }
       }
       if (status.subtitleLanguage !== undefined && status.subtitleLanguage !== root.dataset.subtitleLanguage) {
         root.dataset.subtitleLanguage = status.subtitleLanguage;
         updateSyncContext();
+      }
+      if (subtitleStatus && typeof status.subtitleStatus === "string") {
+        subtitleStatus.textContent = status.subtitleStatus;
       }
       if (String(status.subtitleUrl ?? "") !== subtitleUrl) {
         loadSubtitles(status.subtitleUrl);
@@ -1251,6 +1377,9 @@ export function startPlayer(root) {
       }
     } catch {
       // A transient status failure must not interrupt playback.
+    } finally {
+      clearTimeout(timeout);
+      if (statusController === controller) statusController = null;
     }
   }
 
@@ -1309,8 +1438,10 @@ export function startPlayer(root) {
     setMessage();
     updatePlayButton();
     startTicking();
+    scheduleControlsHide();
   });
   video.addEventListener("pause", () => {
+    showControls({ schedule: false });
     cancelAnimationFrame(animationFrame);
     updatePlayButton();
     updateClock();
@@ -1318,6 +1449,7 @@ export function startPlayer(root) {
     savePosition(true);
   });
   video.addEventListener("ended", () => {
+    showControls({ schedule: false });
     updatePlayButton();
     savePosition(true);
     startMarathonCountdown();
@@ -1337,9 +1469,15 @@ export function startPlayer(root) {
   const syncSeek = () => subtitleSync.seek(video.currentTime, video.duration);
   video.addEventListener("seeking", syncSeek);
   video.addEventListener("waiting", () => setMessage("Cargando vídeo…"));
-  video.addEventListener("playing", () => setMessage());
+  video.addEventListener("playing", () => {
+    if (!root.dataset.hlsUrl) playbackFailure = "";
+    setMessage();
+    scheduleControlsHide();
+  });
   video.addEventListener("canplay", () => setMessage());
   video.addEventListener("error", () => {
+    playbackFailure = "No se pudo reproducir esta fuente. Pulsa Reintentar; si continúa, elige otra en Stremio.";
+    showControls({ schedule: false });
     if (retryButton) retryButton.hidden = false;
     setMessage(
       "No se pudo reproducir esta fuente. Pulsa Reintentar; si continúa, elige otra en Stremio.",
@@ -1354,10 +1492,7 @@ export function startPlayer(root) {
     }
   });
 
-  muteButton.addEventListener("click", () => {
-    video.muted = !video.muted;
-    updateVolume();
-  });
+  muteButton.addEventListener("click", toggleMute);
   volume.addEventListener("input", () => {
     video.volume = Number(volume.value);
     video.muted = video.volume === 0;
@@ -1404,7 +1539,7 @@ export function startPlayer(root) {
       event.preventDefault();
       seekBy(SEEK_STEP, "forward");
     } else if (key === "m") {
-      video.muted = !video.muted;
+      toggleMute();
     } else if (key === "c" && captionsLoaded) {
       captionsButton.click();
     } else if (key === "f") {
@@ -1441,31 +1576,46 @@ export function startPlayer(root) {
     onTrackChange(track) { actualAudio = track; updateSyncContext(); },
     onError(text) {
       playbackFailure = text;
+      showControls({ schedule: false });
       setMessage(text);
       if (retryButton) retryButton.hidden = false;
     },
     onRecovered() {
       playbackFailure = "";
       setMessage();
+      scheduleControlsHide();
       if (retryButton) retryButton.hidden = true;
     },
   }) : null;
   const retryPlayback = () => { savePosition(true); window.location.reload(); };
   retryButton?.addEventListener("click", retryPlayback);
+  const retrySubtitles = () => loadSubtitles();
+  subtitleRetry?.addEventListener("click", retrySubtitles);
   pollStatus();
   const statusTimer = setInterval(pollStatus, 1000);
-  const saveOnExit = () => { savePosition(true); subtitleSync.destroy(); audioPlayback?.destroy(); };
+  function stopRequests() {
+    disposed = true;
+    controlsObserver?.disconnect();
+    subtitleLoadGeneration++;
+    subtitleController?.abort();
+    statusController?.abort();
+    for (const controller of mutationControllers) controller.abort();
+    clearInterval(statusTimer);
+  }
+  const saveOnExit = () => { savePosition(true); stopRequests(); subtitleSync.destroy(); audioPlayback?.destroy(); };
   window.addEventListener("pagehide", saveOnExit);
   const restoreAfterCache = (event) => { if (event.persisted) window.location.reload(); };
   window.addEventListener("pageshow", restoreAfterCache);
 
   return {
     destroy() {
+      stopRequests();
       subtitleSync.destroy();
       syncButton?.removeEventListener("click", toggleSync);
       video.removeEventListener("seeking", syncSeek);
       audioPlayback?.destroy();
       retryButton?.removeEventListener("click", retryPlayback);
+      subtitleRetry?.removeEventListener("click", retrySubtitles);
       clearInterval(statusTimer);
       clearControlsTimer();
       window.removeEventListener("pointerup", finishControlsPointer);

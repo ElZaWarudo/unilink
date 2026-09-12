@@ -157,3 +157,13 @@ test("a final keepalive update is retained while a previous write is in flight",
   await done;
   assert.deepEqual(positions, [10000, 15000]);
 });
+
+test("unsupported content and disconnected accounts do not claim pending cloud progress", async () => {
+  const { sync, configStore } = fixture(() => { throw new Error("unexpected request"); });
+  sync.busy = true;
+  assert.deepEqual(await sync.report({ unilinkContent: { type: "movie", id: "custom-source" } }, { time: 1, duration: 60 }), { state: "unsupported" });
+  assert.deepEqual(await sync.report({}, { time: NaN, duration: 60 }), { state: "invalid" });
+  await configStore.save({ stremioAuthKey: null });
+  assert.deepEqual(await sync.report(active, { time: 1, duration: 60 }), { state: "disconnected" });
+  assert.equal(sync.pendingReport, undefined);
+});

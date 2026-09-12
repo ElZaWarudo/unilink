@@ -113,10 +113,19 @@ export class StreamRegistry {
   }
 
   removeMarathonItem(id) {
-    if (this.marathon) {
-      this.marathon.items = this.marathon.items.filter(
-        (item) => item.id !== id,
-      );
+    const index = this.marathon?.items.findIndex(item => item.id === id) ?? -1;
+    if (index >= 0) {
+      const [item] = this.marathon.items.splice(index, 1);
+      this.marathon.removed = { item, index };
+    }
+    return this.marathonStatus();
+  }
+
+  undoMarathonRemoval() {
+    const removed = this.marathon?.removed;
+    if (removed) {
+      this.marathon.items.splice(Math.min(removed.index, this.marathon.items.length), 0, removed.item);
+      this.marathon.removed = null;
     }
     return this.marathonStatus();
   }
@@ -167,6 +176,8 @@ export class StreamRegistry {
       countdownSeconds: this.marathonSettings.countdownSeconds,
       queueSize: this.marathonSettings.queueSize,
       canAdvance: Boolean(items[0]?.prepared),
+      canUndo: Boolean(this.marathon.removed),
+      undoTitle: this.marathon.removed?.item.title ?? "",
       warning: this.marathon.warning,
       items,
     };
@@ -194,6 +205,7 @@ export class StreamRegistry {
     if (!source) {
       throw new Error("La opción ha caducado. Vuelve a abrir la película en Stremio.");
     }
+    if (this.marathon) this.marathon.removed = null;
     this.version += 1;
     this.active = {
       ...structuredClone(source),
