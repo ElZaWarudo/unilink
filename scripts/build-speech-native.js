@@ -32,7 +32,8 @@ async function hash(path) {
 }
 async function exists(path) { try { await access(path); return true; } catch { return false; } }
 function run(command, args, capture = false) {
-  const result = spawnSync(command, args, { cwd: root, windowsHide: true, encoding: 'utf8', stdio: capture ? 'pipe' : 'inherit' });
+  const result = spawnSync(command, args, { cwd: root, windowsHide: true, encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024, stdio: capture ? 'pipe' : 'inherit' });
   if (result.error || result.status !== 0) throw new Error(`${command} failed: ${result.error?.message || result.stderr || result.status}`);
   return result.stdout?.trim();
 }
