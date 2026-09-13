@@ -124,10 +124,12 @@ is English. Each screen opts in separately. The host analyzes up to two minutes
 of audio around playback and matches spoken phrases with the selected subtitles.
 Audio and recognized words stay on the host; playback does not wait for analysis.
 
-Corrections apply only within sections supported by at least six consistent
-phrase matches. Music, paraphrased subtitles, and uncertain matches can leave a
-section unchanged. The player analyzes later sections as playback advances;
-seeking or changing tracks discards pending work. Enabling Auto-sync starts from
+Each new correction requires at least six consistent phrase matches. The latest
+reliable offset applies across the selected subtitle track, preserving the gaps
+between lines. Failed matches keep that reference while the player analyzes later
+sections as playback advances. This carry-forward timing is an estimate outside
+the matched section. Seeking discards pending work but keeps the reference;
+changing content or tracks clears it. Enabling Auto-sync starts from
 automatic timing; subsequent manual adjustments are added to it. The PC caption
 section shows the effective live delay. Switching Auto-sync off restores manual
 timing, and recoverable errors retry while it remains enabled.

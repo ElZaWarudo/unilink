@@ -247,8 +247,8 @@ test("queue operations acknowledge immediately, protect session, restore focus a
   state = null; await h.player.pollStatus(); assert.equal(h.queue.hidden, true);
 });
 
-test("autosync replaces a saved manual delay and later fine-tuning remains relative", async t => {
-  let instance, manualDelay = -2;
+test("autosync replaces manual delay and keeps its reference when later matching fails", async t => {
+  let instance, manualDelay = -2, noMatch = false;
   const reports = [];
   class FakeHls {
     static isSupported = () => true;
@@ -263,10 +263,10 @@ test("autosync replaces a saved manual delay and later fine-tuning remains relat
     fetchImpl: async (url, options) => {
       if (url === "/api/subtitle-sync/playback") { reports.push(JSON.parse(options.body)); return Response.json({}); }
       if (url === "/api/progress") return Response.json({state:"saved"});
-      if (url === "/en.vtt") return new Response("WEBVTT\n\n00:02:00.000 --> 00:02:01.000\nAligned phrase\n");
+      if (url === "/en.vtt") return new Response("WEBVTT\n\n00:02:00.000 --> 00:02:01.000\nAligned phrase\n\n00:04:00.000 --> 00:04:01.000\nLater phrase\n");
       if (url === "/api/status") return Response.json({version:3,serverInstanceId:"instance",subtitleUrl:"/en.vtt",subtitleDelay:manualDelay});
       if (url === "/api/subtitle-sync") return Response.json(options.method === "POST"
-        ? {state:"ready",result:{start:100,end:150,offset:1,anchors:6,residual:0.1}} : {available:true});
+        ? noMatch ? {state:"insufficient"} : {state:"ready",result:{start:100,end:150,offset:1,anchors:6,residual:0.1}} : {available:true});
       throw Error("Unexpected request");
     } });
   await settle(); instance.callbacks.tracks();
@@ -275,7 +275,7 @@ test("autosync replaces a saved manual delay and later fine-tuning remains relat
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(h.root.dataset.subtitleState,"ready");
   assert.equal(h.parts["subtitle-sync"].attributes["aria-pressed"],"true");
-  assert.equal(h.parts["subtitle-sync-status"].textContent,"Tramo sincronizado");
+  assert.equal(h.parts["subtitle-sync-status"].textContent,"Referencia actualizada");
   assert.equal(h.parts.caption.textContent,"Aligned phrase","saved -2s must not offset the automatic match");
   assert.equal(h.root.dataset.currentDelay,"0");
   assert.equal(reports.at(-1).automaticOffset, 1);
@@ -290,6 +290,13 @@ test("autosync replaces a saved manual delay and later fine-tuning remains relat
   assert.equal(reports.at(-1).automaticOffset, 1, "manual +1 is not added to the automatic report");
   assert.equal(reports.at(-1).manualBaseline, -2);
   assert.equal(reports.at(-1).time, 122.5);
+  noMatch = true;
+  h.video.currentTime = 242.5; await h.video.emit("timeupdate"); await settle();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.parts.caption.textContent, "Later phrase");
+  assert.equal(h.parts["subtitle-sync-status"].textContent, "Sin nueva coincidencia; se mantiene el último ajuste");
+  h.expire(3000); await settle();
+  assert.equal(reports.at(-1).automaticOffset, 1);
   await h.parts["subtitle-sync"].emit("click"); await settle();
   assert.equal(h.root.dataset.currentDelay,"-1","disabling auto restores ordinary manual timing");
   assert.equal(reports.at(-1).enabled, false);

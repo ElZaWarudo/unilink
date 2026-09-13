@@ -25,39 +25,67 @@ function harness(handler) {
     async poll() { const entry = timers.entries().next().value; assert.ok(entry); timers.delete(entry[0]); entry[1](); await flush(); } };
 }
 
-test("bounded positive and negative corrections retain text/duration and manual delay is additive", () => {
+test("the latest reliable offset covers the whole track and manual delay remains additive", () => {
   const cues = [{ start: 1, end: 3, text: "Outside" }, { start: 20, end: 22, text: "Hello" }, { start: 80, end: 82, text: "Outside too" }];
   for (const offset of [-2, 2]) {
     const result = alignedSubtitleCues(cues, [{ ...correction, offset }]);
-    assert.deepEqual(result[0], cues[0]); assert.deepEqual(result[2], cues[2]);
+    assert.equal(result[2].start, cues[2].start + offset);
     assert.equal(result[1].end - result[1].start, 2);
     assert.equal(cueAtTime(result, 20 + offset + 0.5 + 1, 1)?.text, "Hello");
-    assert.equal(cueAtTime(result, 2)?.text, "Outside");
+    assert.equal(cueAtTime(result, Math.max(0, 2 + offset))?.text, "Outside");
   }
   assert.equal(alignedSubtitleCues(cues, [correction, { ...correction, offset: -1 }])[1].start, 19);
 });
 
 test("correction boundaries never introduce overlaps or reorder cues", () => {
   const cues = [{ start: 8, end: 10, text: "First" }, { start: 11, end: 13, text: "Second" }];
-  assert.deepEqual(alignedSubtitleCues(cues, [{ start: 11, end: 20, offset: -2 }]), cues);
-  assert.deepEqual(alignedSubtitleCues(cues, [{ start: 8, end: 10, offset: 10 }]), cues);
-  assert.deepEqual(alignedSubtitleCues(cues, [{ start: 0, end: 20, offset: -9 }]), cues);
+  for (const offset of [-2, 10, -9]) {
+    const shifted = alignedSubtitleCues(cues, [{ start: 11, end: 20, offset }]);
+    assert.equal(shifted[1].start, 11 + offset);
+    assert.ok(shifted[0].end <= shifted[1].start);
+    assert.ok(shifted.every(cue => cue.end >= cue.start));
+  }
 });
 
-test("dense boundary cues are trimmed while interior alignment survives", () => {
+test("manual adjustment can cancel an automatic offset near the beginning", () => {
+  const cues = [{ start: 1, end: 3, text: "First line" }];
+  const shifted = alignedSubtitleCues(cues, [{ start: 0, end: 30, offset: -2 }]);
+  assert.equal(cueAtTime(shifted, 1.5, 2)?.text, "First line");
+  assert.equal(shifted[0].end - shifted[0].start, 2);
+});
+
+test("dense boundary cues keep their gaps instead of rejecting the correction", () => {
   const cues = [{ start: 1, end: 3, text: "Outside" }, { start: 10, end: 12, text: "Interior" },
     { start: 20, end: 22, text: "Tight boundary" }, { start: 22.2, end: 24, text: "Outside end" }];
   const shifted = alignedSubtitleCues(cues, [{ start: 10, end: 22, offset: 1 }]);
   assert.equal(shifted[1].start, 11);
-  assert.deepEqual(shifted[2], cues[2]);
-  assert.deepEqual(shifted[3], cues[3]);
+  assert.equal(shifted[2].start, 21);
+  assert.equal(shifted[3].start, 23.2);
   const negative = alignedSubtitleCues(cues, [{ start: 20, end: 30, offset: -2 }]);
   assert.equal(negative[2].start, 18);
   assert.equal(negative[3].start, 20.2);
   const tightStart = [{ start: 8, end: 10, text: "Outside" }, { start: 10.2, end: 12, text: "Tight" },
     { start: 20, end: 22, text: "Interior" }];
   const trimmed = alignedSubtitleCues(tightStart, [{ start: 10.2, end: 30, offset: -1 }]);
-  assert.deepEqual(trimmed[1], tightStart[1]); assert.equal(trimmed[2].start, 19);
+  assert.equal(trimmed[0].end, 9);
+  assert.equal(trimmed[1].start, 9.2); assert.equal(trimmed[2].start, 19);
+});
+
+test("failed later matches retain the old reference until a successful update replaces it", async () => {
+  let outcome = { state: "ready", result: correction };
+  const h = harness(async () => outcome);
+  await h.controller.setEnabled(true); await flush();
+  const cues = [{ start: 130, end: 132, text: "Still aligned" }];
+  outcome = { state: "insufficient" };
+  h.controller.tick(130, 900); await flush();
+  assert.equal(h.changes.at(-1).state, "insufficient");
+  assert.equal(alignedSubtitleCues(cues, h.changes.at(-1).corrections)[0].start, 132);
+  outcome = { state: "ready", result: { ...correction, start: 180, end: 230, offset: 3 } };
+  h.controller.tick(190, 900); await flush();
+  assert.equal(alignedSubtitleCues(cues, h.changes.at(-1).corrections)[0].start, 133);
+  h.controller.setContext({ ...context, subtitleUrl: "/subtitle/1.vtt" });
+  assert.deepEqual(alignedSubtitleCues(cues, h.changes.at(-1).corrections), cues);
+  h.controller.destroy();
 });
 
 test("opt-in polls one job and applies a ready response once", async () => {

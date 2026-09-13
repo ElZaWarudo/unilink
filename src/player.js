@@ -506,43 +506,18 @@ export function isEnglishLanguage(language) {
   return /^(en|eng|english)([-_].*)?$/i.test(String(language || ""));
 }
 
-// Apply whole cues inside verified bounds. Trim conflicting boundary cues back
-// to their original timing until a safe gap, retaining the aligned interior.
-export function alignedSubtitleCues(cues, corrections) {
-  const valid = corrections.slice(-32).filter(item =>
-    [item.start, item.end, item.offset].every(Number.isFinite) && item.end > item.start);
-  const shifted = cues.map(cue => {
-    const item = valid.findLast(item => cue.start >= item.start && cue.end <= item.end);
-    return !item || !item.offset ? cue : { ...cue, start: cue.start + item.offset, end: cue.end + item.offset };
-  });
-  const pending = cues.map((_cue, index) => index);
-  const revert = index => {
-    if (index < 0 || index >= cues.length || shifted[index] === cues[index]) return;
-    shifted[index] = cues[index];
-    pending.push(index, index + 1);
-  };
-  for (let cursor = 0; cursor < pending.length; cursor++) {
-    const index = pending[cursor];
-    if (index >= cues.length) continue;
-    if (shifted[index].start < 0) revert(index);
-    if (!index) continue;
-    const gap = Math.min(0, cues[index].start - cues[index - 1].end);
-    if (shifted[index].start < shifted[index - 1].start ||
-        shifted[index].start - shifted[index - 1].end < gap - 0.000001) {
-      revert(index); revert(index - 1);
-    }
-  }
-  return shifted;
+export function appliedSubtitleOffset(corrections) {
+  return corrections.findLast(item =>
+    [item.start, item.end, item.offset].every(Number.isFinite) && item.end > item.start)?.offset ?? 0;
 }
 
-export function appliedSubtitleOffset(cues, shifted, corrections, time, manualAdjustment = 0) {
-  const active = cueAtTime(shifted, time, manualAdjustment);
-  if (active) {
-    const index = shifted.indexOf(active);
-    return shifted[index].start - cues[index].start;
-  }
-  const position = time - manualAdjustment;
-  return corrections.findLast(item => position >= item.start + item.offset && position < item.end + item.offset)?.offset || 0;
+// Keep one reference across the track until a newer reliable match replaces it.
+// A uniform shift preserves cue gaps and avoids artificial section boundaries.
+export function alignedSubtitleCues(cues, corrections) {
+  const offset = appliedSubtitleOffset(corrections);
+  return !offset ? cues : cues.map(cue => ({ ...cue,
+    start: cue.start + offset, end: cue.end + offset,
+  }));
 }
 
 export function createSubtitleSyncController({ token, fetchImpl = fetch, onChange = () => {},
@@ -809,8 +784,7 @@ export function startPlayer(root) {
     getSnapshot() {
       return { serverInstanceId: expectedServerInstanceId, version: expectedVersion, subtitleUrl,
         enabled: syncEnabled, state: syncState,
-        automaticOffset: syncEnabled ? appliedSubtitleOffset(cues, syncedCues, syncCorrections,
-          video.currentTime, playbackSubtitleDelay()) : 0,
+        automaticOffset: syncEnabled ? appliedSubtitleOffset(syncCorrections) : 0,
         manualBaseline: syncEnabled ? syncManualBaseline : 0,
         time: Number.isFinite(video.currentTime) ? video.currentTime : 0 };
     } });
@@ -828,14 +802,13 @@ export function startPlayer(root) {
         syncButton.setAttribute("aria-pressed", String(enabled));
       }
       if (syncStatus) {
-        const latest = corrections.at(-1);
-        const boundaryRejected = state === "ready" && latest?.offset && cues.some(cue =>
-          cue.start >= latest.start && cue.end <= latest.end) && !cues.some((cue, index) =>
-          cue.start >= latest.start && cue.end <= latest.end && syncedCues[index].start !== cue.start);
+        const hasReference = corrections.length > 0;
         const labels = {
           off: eligible ? "" : "Requiere subtítulos y audio en inglés",
           waiting: "Esperando diálogo…", working: "Sincronizando este tramo… Puede tardar hasta 3 minutos",
-          ready: "Tramo sincronizado", insufficient: "Sin coincidencia fiable; se conserva el tiempo original",
+          ready: "Referencia actualizada", insufficient: hasReference
+            ? "Sin nueva coincidencia; se mantiene el último ajuste"
+            : "Sin coincidencia fiable; esperando otra sección con diálogo",
           busy: "Motor ocupado; reintentando…", unavailable: "Motor no disponible; reintentando…",
           error: "No se pudo sincronizar; reintentando…",
           stale: "La fuente ha cambiado; abre la reproducción actual",
@@ -844,7 +817,9 @@ export function startPlayer(root) {
           loading_model: "Cargando motor de voz", queued: "Esperando al motor",
           recognizing: "Reconociendo diálogo", matching: "Comprobando coincidencias" };
         const working = stages[stage] ? `${stages[stage]}… ${Math.floor(elapsedMs / 1000)} s` : labels.working;
-        const text = boundaryRejected ? "No se puede ajustar este tramo sin solapar subtítulos" : state === "working" ? working : labels[state] || "";
+        const text = (state === "working" ? working : labels[state] || "") +
+          (hasReference && ["working", "waiting", "busy", "unavailable", "error"].includes(state)
+            ? " · Último ajuste activo" : "");
         if (syncStatus.textContent !== text) syncStatus.textContent = text;
       }
       renderCaption();

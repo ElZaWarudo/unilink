@@ -92,14 +92,13 @@ test("a delayed rejection cannot suppress a newer visit to the same track", asyn
   reporter.destroy(); replies.shift()(Response.json({})); await flush();
 });
 
-test("reported automatic correction follows rendered boundary cues and excludes manual adjustment", () => {
+test("reported automatic correction stays at the last reference beyond the matched section", () => {
   const cues = [{ start: 10, end: 12, text: "Interior" }, { start: 20, end: 22, text: "Boundary" },
     { start: 22.2, end: 24, text: "Outside" }];
   const corrections = [{ start: 10, end: 22, offset: 1 }];
   const shifted = alignedSubtitleCues(cues, corrections);
-  assert.equal(appliedSubtitleOffset(cues, shifted, corrections, 11.5, 0), 1);
-  assert.equal(appliedSubtitleOffset(cues, shifted, corrections, 12, 0.5), 1);
-  assert.equal(appliedSubtitleOffset(cues, shifted, corrections, 21, 0), 0);
-  assert.equal(appliedSubtitleOffset(cues, shifted, corrections, 16, 0), 1);
-  assert.equal(appliedSubtitleOffset(cues, shifted, corrections, 50, 0), 0);
+  assert.equal(appliedSubtitleOffset(corrections), 1);
+  assert.equal(shifted[2].start, cues[2].start + 1);
+  assert.equal(appliedSubtitleOffset([...corrections, { start: 40, end: 60, offset: 0 }]), 0);
+  assert.equal(appliedSubtitleOffset([]), 0);
 });
