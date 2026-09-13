@@ -101,6 +101,19 @@ test("deduplicates same window, limits concurrency, and caches by source/track",
   sync.close();
 });
 
+test("a fresh request retries an insufficient match while duplicate requests reuse it", async t => {
+  let calls = 0;
+  const sync = new SubtitleSync({ run: async () => { calls++; return { state: "insufficient" }; } });
+  t.after(() => sync.close());
+  const first = sync.start(context({ requestId: "first-toggle" }));
+  assert.equal((await completed(sync, first.jobId)).state, "insufficient");
+  assert.equal(sync.start(context({ requestId: "first-toggle" })).jobId, first.jobId);
+  const retry = sync.start(context({ requestId: "second-toggle" }));
+  assert.notEqual(retry.jobId, first.jobId);
+  assert.equal((await completed(sync, retry.jobId)).state, "insufficient");
+  assert.equal(calls, 2);
+});
+
 test("accepts two bounded jobs and reports worker progress without mixing results", async () => {
   const finishes = [];
   const sync = new SubtitleSync({ run: (_input, _signal, progress) => {

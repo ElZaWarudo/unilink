@@ -636,9 +636,9 @@ function layout(
       margin-top: 2px;
     }
     .player-control-row .control-spacer { flex: 1; }
-    .player-sync-row { display: flex; align-items: center; gap: 8px; }
+    .player-sync-row { display: flex; align-items: center; gap: 8px; min-height: 32px; }
     .player-sync-row [role="status"] { min-width: 0; font-size: 11px; line-height: 1.3; color: var(--muted); }
-    .player-sync-row [role="status"]:empty { display: none; }
+    .player-sync-row [role="status"]:empty { visibility: hidden; }
     .player-controls [data-player-control="subtitle-sync"] { font-size: 11px; padding-inline: 6px; white-space: nowrap; }
     .player-controls button {
       min-width: 44px;
@@ -1690,6 +1690,10 @@ export function watchPage({
          role="status" aria-live="polite" aria-atomic="true"></p>
        </div>
        <div class="player-controls" aria-label="Controles de reproducción">
+         <div class="player-sync-row">
+           <button data-player-control="subtitle-retry" type="button" hidden>Reintentar subtítulos</button>
+           <span id="subtitleSyncStatus" data-player-part="subtitle-sync-status" role="status" aria-live="polite">Requiere subtítulos y audio en inglés</span>
+         </div>
          <div class="player-timeline">
            <label class="sr-only" for="playerSeek">Posición del vídeo</label>
            <input class="player-seek" id="playerSeek" data-player-control="seek"
@@ -1718,10 +1722,6 @@ export function watchPage({
              aria-describedby="subtitleSyncStatus" disabled>Auto-sync</button>
            <button data-player-control="fullscreen" type="button"
              aria-label="Pantalla completa" title="Pantalla completa (F)">⛶</button>
-         </div>
-         <div class="player-sync-row">
-           <button data-player-control="subtitle-retry" type="button" hidden>Reintentar subtítulos</button>
-           <span id="subtitleSyncStatus" data-player-part="subtitle-sync-status" role="status" aria-live="polite">Requiere subtítulos y audio en inglés</span>
          </div>
        </div>
        </div>

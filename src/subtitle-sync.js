@@ -156,7 +156,7 @@ export class SubtitleSync {
         this.cancel(id, "stale");
         if (!this.running.has(job)) this.jobs.delete(id);
       } else if (job.key === key && ["working", "ready", "insufficient"].includes(job.state) &&
-          (job.state !== "working" || job.requestId === requestId)) return this.view(job);
+          (job.state === "ready" || job.requestId === requestId)) return this.view(job);
     }
     if (this.running.size >= this.maxConcurrent) return { state: "busy" };
     while (this.jobs.size >= 32) {
